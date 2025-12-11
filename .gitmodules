@@ -1,0 +1,3 @@
+[submodule "reference"]
+	path = reference
+	url = https://github.com/Phyll1s0/CPU-simulator.git
