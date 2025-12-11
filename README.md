@@ -6,9 +6,9 @@ A simple RISC-V CPU simulator implemented in Python using [assassyn](https://git
 
 最终这个 CPU 需要完成以下 benchmark：
 
-- [x] 一个[向量乘法](https://github.com/ucb-bar/riscv-benchmarks/blob/4d46f673ae42a321e35f5b40b2f5c8f498bc1d9d/multiply/multiply_main.c#L35-L40)
-- [x] 一个[向量加法](https://github.com/ucb-bar/riscv-benchmarks/blob/master/vvadd/vvadd_main.c#L26-L31)
-- [x] 一个从 0 加到 100 的循环
+- [] 一个[向量乘法](https://github.com/ucb-bar/riscv-benchmarks/blob/4d46f673ae42a321e35f5b40b2f5c8f498bc1d9d/multiply/multiply_main.c#L35-L40)
+- [] 一个[向量加法](https://github.com/ucb-bar/riscv-benchmarks/blob/master/vvadd/vvadd_main.c#L26-L31)
+- [] 一个从 0 加到 100 的循环
 
 以上代码都需要：
 
