@@ -3,6 +3,20 @@ from assassyn.backend import *
 from assassyn import utils
 from assassyn.utils import run_simulator, run_verilator
 
+class Decoder(Module):
+    def __init__(self):
+        super().__init__(
+            ports={"pc_addr": Port(UInt(32))}
+        )
+    @module.combinational
+    def build(self,
+              icache: SRAM):
+        pc_addr = self.pop_all_ports(True)
+        instr = icache.dout[0]
+        log("decoder pc addr: {}, instr: {:05x}", pc_addr, instr)
+
+        # 接下来要解析这个 instr
+
 class Fetcher(Module):
     def __init__(self):
         super().__init__(
@@ -10,7 +24,8 @@ class Fetcher(Module):
         )
     @module.combinational
     def build(self,
-              icache: SRAM):
+              icache: SRAM,
+              decoder: Decoder):
         pc_reg = RegArray(UInt(32), 1)
         pc_addr = pc_reg[0]
 
@@ -24,7 +39,7 @@ class Fetcher(Module):
         # Fetch 阶段完成后，pc + 4，如果是跳转指令的话，在后续阶段会修改 pc_reg 的值
         pc_reg[0] <= pc_addr + UInt(32)(4)
 
-        # 如果有 Decoder，这个时候就 async_called Decoder
+        decoder.async_called(pc_addr=pc_addr)
 
         return pc_reg, pc_addr
 
@@ -41,8 +56,8 @@ class Driver(Module):
             is_init[0] <= UInt(1)(0)
             fecher.async_called()
             log("Naive CPU Simulation Started")
-        with Condition(is_init[0] == UInt(1)(0)):
-            log("Naive CPU Simulation Running")
+        # with Condition(is_init[0] == UInt(1)(0)):
+            # log("Naive CPU Simulation Running")
 
 
 current_path = os.path.dirname(os.path.abspath(__file__))
@@ -55,8 +70,10 @@ def build_naive_CPU(depth_log):
                       depth= 1 << depth_log,
                       init_file= f"{workspace}/workload.exe")
         icache.name = "icache"
+        decoder = Decoder()
+        decoder.build(icache=icache)
         fetcher = Fetcher()
-        pc_reg, pc_addr = fetcher.build(icache=icache)
+        pc_reg, pc_addr = fetcher.build(icache=icache, decoder=decoder)
         driver = Driver()
         driver.build(fecher=fetcher)
     return sys
