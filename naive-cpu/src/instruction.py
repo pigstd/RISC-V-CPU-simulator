@@ -239,4 +239,6 @@ deocder_signals = Record(
     branch_type = Bits(3),
     is_jal = Bits(1),
     is_jalr = Bits(1),
+    is_ecall = Bits(1),
+    is_ebreak = Bits(1),
 )

@@ -64,6 +64,8 @@ def decoder_logic(inst):
     branch_type = is_B.select(inst[12:14], Bits(3)(0))
     is_jal = is_J
     is_jalr = is_eq.get("jalr", Bits(1)(0))
+    is_ecall = ecall
+    is_ebreak = ebreak
 
     # ALU 类型：优先 R > I > I*
     alu_type = is_R.select(R_alu,
@@ -96,4 +98,6 @@ def decoder_logic(inst):
         branch_type=branch_type,
         is_jal=is_jal,
         is_jalr=is_jalr,
+        is_ecall=is_ecall,
+        is_ebreak=is_ebreak,
     )
