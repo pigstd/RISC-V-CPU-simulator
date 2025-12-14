@@ -1,6 +1,6 @@
 from assassyn.frontend import *
 from assassyn.backend import *
-from assassyn import utils
+from assassyn import utils, backend
 from assassyn.utils import run_simulator, run_verilator
 from decoder import *
 from excutor import executor_logic
@@ -170,11 +170,23 @@ def build_naive_CPU(depth_log):
     return sys
 
 def main():
+    import argparse
+
+    # --sim-threshold 100 --idle-threshold 100 设置模拟器参数
+    parser = argparse.ArgumentParser(description="Run Naive CPU simulator")
+    parser.add_argument("--sim-threshold", type=int, default=100, help="max simulation steps")
+    parser.add_argument("--idle-threshold", type=int, default=100, help="idle cycles before stop")
+    args = parser.parse_args()
+
     sys = build_naive_CPU(depth_log = 16)
-    sim,vcd = elaborate(sys=sys,
-                        verbose=True,
-                        verilog=True,
-                        resource_base='.')
+    cfg = backend.config(
+        resource_base='.',
+        verilog=True,
+        verbose=True,
+        sim_threshold=args.sim_threshold,
+        idle_threshold=args.idle_threshold,
+    )
+    sim,vcd = elaborate(sys=sys, **cfg)
     output = run_simulator(sim)
     print("simulate output:")
     print(output)
