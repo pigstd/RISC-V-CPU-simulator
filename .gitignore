@@ -17,3 +17,4 @@ build/
 /playground
 
 workspace/
+__pycache__/

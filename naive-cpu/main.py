@@ -2,6 +2,17 @@ from assassyn.frontend import *
 from assassyn.backend import *
 from assassyn import utils
 from assassyn.utils import run_simulator, run_verilator
+from decoder import *
+
+class Executor(Module):
+    def __init__(self):
+        super().__init__(
+            ports= {"decoder_result": Port(deocder_signals)}
+        )
+    @module.combinational
+    def build(self):
+        decoder_result = self.pop_all_ports(True)
+        log("executing...")
 
 class Decoder(Module):
     def __init__(self):
@@ -10,12 +21,14 @@ class Decoder(Module):
         )
     @module.combinational
     def build(self,
-              icache: SRAM):
+              icache: SRAM,
+              executor: Executor):
         pc_addr = self.pop_all_ports(True)
         instr = icache.dout[0]
         log("decoder pc addr: {}, instr: {:05x}", pc_addr, instr)
 
-        # 接下来要解析这个 instr
+        decoder_result = decoder_logic(inst=instr)
+        executor.async_called(decoder_result=decoder_result)
 
 class Fetcher(Module):
     def __init__(self):
@@ -70,11 +83,13 @@ def build_naive_CPU(depth_log):
                       depth= 1 << depth_log,
                       init_file= f"{workspace}/workload.exe")
         icache.name = "icache"
+        executor = Executor()
         decoder = Decoder()
-        decoder.build(icache=icache)
         fetcher = Fetcher()
-        pc_reg, pc_addr = fetcher.build(icache=icache, decoder=decoder)
         driver = Driver()
+        executor.build()
+        decoder.build(icache=icache, executor=executor)
+        pc_reg, pc_addr = fetcher.build(icache=icache, decoder=decoder)
         driver.build(fecher=fetcher)
     return sys
 
