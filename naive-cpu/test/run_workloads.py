@@ -30,15 +30,27 @@ EXPECTED = {
     "bitcount": 5,
     "max": 9,
     "reverse": 5,
+    "shift_test": 4,
 }
 
 LOG_PATTERN = re.compile(r"writeback stage: rd = ([0-9a-fA-Fx]+) data = ([0-9a-fA-Fx]+)")
 
 
+def locate_workload(name: str):
+    # Prefer per-test subfolder, fallback to flat layout for compatibility
+    candidates = [
+        (WORKLOAD_DIR / name / f"{name}.exe", WORKLOAD_DIR / name / f"{name}.data"),
+        (WORKLOAD_DIR / f"{name}.exe", WORKLOAD_DIR / f"{name}.data"),
+    ]
+    for exe, data in candidates:
+        if exe.exists() and data.exists():
+            return exe, data
+    return None, None
+
+
 def run_one(name: str, sim_threshold: int = 500000, idle_threshold: int = 500000):
-    exe = WORKLOAD_DIR / f"{name}.exe"
-    data = WORKLOAD_DIR / f"{name}.data"
-    if not exe.exists() or not data.exists():
+    exe, data = locate_workload(name)
+    if exe is None or data is None:
         return False, f"missing workload files for {name}"
 
     shutil.copyfile(exe, WORKSPACE_DIR / "workload.exe")

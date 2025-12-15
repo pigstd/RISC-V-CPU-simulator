@@ -1,0 +1,94 @@
+
+/home/zhuzemu/homework/RISC-V-CPU-simulator/test/my_tests/workloads/factorial/factorial.riscv:     file format elf32-littleriscv
+
+
+Disassembly of section .text:
+
+00010000 <_start>:
+   10000:	00010137          	lui	sp,0x10
+   10004:	00000097          	auipc	ra,0x0
+   10008:	0c0080e7          	jalr	192(ra) # 100c4 <main>
+   1000c:	00100073          	ebreak
+
+00010010 <multiply>:
+   10010:	fd010113          	addi	sp,sp,-48 # ffd0 <_start-0x30>
+   10014:	02812623          	sw	s0,44(sp)
+   10018:	03010413          	addi	s0,sp,48
+   1001c:	fca42e23          	sw	a0,-36(s0)
+   10020:	fcb42c23          	sw	a1,-40(s0)
+   10024:	fe042623          	sw	zero,-20(s0)
+   10028:	fe042423          	sw	zero,-24(s0)
+   1002c:	fdc42783          	lw	a5,-36(s0)
+   10030:	0207d063          	bgez	a5,10050 <multiply+0x40>
+   10034:	fdc42783          	lw	a5,-36(s0)
+   10038:	40f007b3          	neg	a5,a5
+   1003c:	fcf42e23          	sw	a5,-36(s0)
+   10040:	fe842783          	lw	a5,-24(s0)
+   10044:	0017b793          	seqz	a5,a5
+   10048:	0ff7f793          	zext.b	a5,a5
+   1004c:	fef42423          	sw	a5,-24(s0)
+   10050:	fd842783          	lw	a5,-40(s0)
+   10054:	0407d063          	bgez	a5,10094 <multiply+0x84>
+   10058:	fd842783          	lw	a5,-40(s0)
+   1005c:	40f007b3          	neg	a5,a5
+   10060:	fcf42c23          	sw	a5,-40(s0)
+   10064:	fe842783          	lw	a5,-24(s0)
+   10068:	0017b793          	seqz	a5,a5
+   1006c:	0ff7f793          	zext.b	a5,a5
+   10070:	fef42423          	sw	a5,-24(s0)
+   10074:	0200006f          	j	10094 <multiply+0x84>
+   10078:	fec42703          	lw	a4,-20(s0)
+   1007c:	fdc42783          	lw	a5,-36(s0)
+   10080:	00f707b3          	add	a5,a4,a5
+   10084:	fef42623          	sw	a5,-20(s0)
+   10088:	fd842783          	lw	a5,-40(s0)
+   1008c:	fff78793          	addi	a5,a5,-1
+   10090:	fcf42c23          	sw	a5,-40(s0)
+   10094:	fd842783          	lw	a5,-40(s0)
+   10098:	fef040e3          	bgtz	a5,10078 <multiply+0x68>
+   1009c:	fe842783          	lw	a5,-24(s0)
+   100a0:	00078863          	beqz	a5,100b0 <multiply+0xa0>
+   100a4:	fec42783          	lw	a5,-20(s0)
+   100a8:	40f007b3          	neg	a5,a5
+   100ac:	0080006f          	j	100b4 <multiply+0xa4>
+   100b0:	fec42783          	lw	a5,-20(s0)
+   100b4:	00078513          	mv	a0,a5
+   100b8:	02c12403          	lw	s0,44(sp)
+   100bc:	03010113          	addi	sp,sp,48
+   100c0:	00008067          	ret
+
+000100c4 <main>:
+   100c4:	fe010113          	addi	sp,sp,-32
+   100c8:	00112e23          	sw	ra,28(sp)
+   100cc:	00812c23          	sw	s0,24(sp)
+   100d0:	02010413          	addi	s0,sp,32
+   100d4:	00500793          	li	a5,5
+   100d8:	fef42223          	sw	a5,-28(s0)
+   100dc:	00100793          	li	a5,1
+   100e0:	fef42623          	sw	a5,-20(s0)
+   100e4:	00100793          	li	a5,1
+   100e8:	fef42423          	sw	a5,-24(s0)
+   100ec:	0240006f          	j	10110 <main+0x4c>
+   100f0:	fe842583          	lw	a1,-24(s0)
+   100f4:	fec42503          	lw	a0,-20(s0)
+   100f8:	00000097          	auipc	ra,0x0
+   100fc:	f18080e7          	jalr	-232(ra) # 10010 <multiply>
+   10100:	fea42623          	sw	a0,-20(s0)
+   10104:	fe842783          	lw	a5,-24(s0)
+   10108:	00178793          	addi	a5,a5,1
+   1010c:	fef42423          	sw	a5,-24(s0)
+   10110:	fe842703          	lw	a4,-24(s0)
+   10114:	fe442783          	lw	a5,-28(s0)
+   10118:	fce7dce3          	bge	a5,a4,100f0 <main+0x2c>
+   1011c:	fec42783          	lw	a5,-20(s0)
+   10120:	00078513          	mv	a0,a5
+   10124:	00000013          	nop
+   10128:	00000013          	nop
+   1012c:	00000013          	nop
+   10130:	00100073          	ebreak
+   10134:	00000793          	li	a5,0
+   10138:	00078513          	mv	a0,a5
+   1013c:	01c12083          	lw	ra,28(sp)
+   10140:	01812403          	lw	s0,24(sp)
+   10144:	02010113          	addi	sp,sp,32
+   10148:	00008067          	ret
