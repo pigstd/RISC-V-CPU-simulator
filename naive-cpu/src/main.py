@@ -143,7 +143,7 @@ class Driver(Module):
 current_path = os.path.dirname(os.path.abspath(__file__))
 workspace = f'{current_path}/workspace/'
 
-def build_naive_CPU(depth_log):
+def build_naive_CPU(depth_log=18):
     sys = SysBuilder("Naive-CPU")
     with sys:
         icache = SRAM(width= 32,
@@ -180,7 +180,7 @@ def main():
     parser.add_argument("--idle-threshold", type=int, default=100, help="idle cycles before stop")
     args = parser.parse_args()
 
-    sys = build_naive_CPU(depth_log = 16)
+    sys = build_naive_CPU(depth_log = 18)
     cfg = backend.config(
         resource_base='.',
         verilog=True,

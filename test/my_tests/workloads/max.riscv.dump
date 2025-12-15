@@ -1,5 +1,5 @@
 
-/home/louhao/System-2025/RISC-V-CPU-simulator/test/my_tests/workloads/max.riscv:     file format elf32-littleriscv
+/home/zhuzemu/homework/RISC-V-CPU-simulator/test/my_tests/workloads/max.riscv:     file format elf32-littleriscv
 
 
 Disassembly of section .text:
@@ -37,15 +37,15 @@ Disassembly of section .text:
    1006c:	0440006f          	j	100b0 <main+0xa0>
    10070:	fe842783          	lw	a5,-24(s0)
    10074:	00279793          	slli	a5,a5,0x2
-   10078:	ff040713          	addi	a4,s0,-16
-   1007c:	00f707b3          	add	a5,a4,a5
+   10078:	ff078793          	addi	a5,a5,-16
+   1007c:	008787b3          	add	a5,a5,s0
    10080:	fdc7a783          	lw	a5,-36(a5)
    10084:	fec42703          	lw	a4,-20(s0)
    10088:	00f75e63          	bge	a4,a5,100a4 <main+0x94>
    1008c:	fe842783          	lw	a5,-24(s0)
    10090:	00279793          	slli	a5,a5,0x2
-   10094:	ff040713          	addi	a4,s0,-16
-   10098:	00f707b3          	add	a5,a4,a5
+   10094:	ff078793          	addi	a5,a5,-16
+   10098:	008787b3          	add	a5,a5,s0
    1009c:	fdc7a783          	lw	a5,-36(a5)
    100a0:	fef42623          	sw	a5,-20(s0)
    100a4:	fe842783          	lw	a5,-24(s0)

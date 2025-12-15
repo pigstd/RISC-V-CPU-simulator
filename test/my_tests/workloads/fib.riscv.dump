@@ -1,5 +1,5 @@
 
-/home/louhao/System-2025/RISC-V-CPU-simulator/test/my_tests/workloads/fib.riscv:     file format elf32-littleriscv
+/home/zhuzemu/homework/RISC-V-CPU-simulator/test/my_tests/workloads/fib.riscv:     file format elf32-littleriscv
 
 
 Disassembly of section .text:

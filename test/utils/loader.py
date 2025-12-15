@@ -12,6 +12,8 @@ Usage:
 import argparse
 import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 
@@ -112,6 +114,89 @@ def generate_hex_file(instructions, output_path: str, base_addr: int = 0x10000, 
     print(f"Generated hex file: {output_path}")
 
 
+def parse_elf_sections(elf_path: Path, names):
+    """
+    Parse section headers from ELF using readelf -S.
+    Returns list of tuples (name, addr, offset, size, type).
+    """
+    try:
+        out = subprocess.check_output(
+            ["riscv64-unknown-elf-readelf", "-S", str(elf_path)],
+            text=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        print(f"Warning: failed to run readelf on {elf_path}: {e}")
+        return []
+
+    sec_re = re.compile(
+        r"\s*\[\s*\d+\]\s+(\S+)\s+(\S+)\s+([0-9a-fA-F]+)\s+([0-9a-fA-F]+)\s+([0-9a-fA-F]+)"
+    )
+    sections = []
+    for line in out.splitlines():
+        m = sec_re.match(line)
+        if not m:
+            continue
+        name, stype, addr_hex, off_hex, size_hex = m.groups()
+        if name not in names:
+            continue
+        addr = int(addr_hex, 16)
+        off = int(off_hex, 16)
+        size = int(size_hex, 16)
+        sections.append((name, stype, addr, off, size))
+    return sections
+
+
+def generate_data_file(elf_path: Path, output_path: str, base_addr: int = 0x0, mem_depth: int = 262144):
+    """
+    Generate data memory image (.data file) from ELF's data/rodata/sdata/bss.
+    """
+    if not elf_path.exists():
+        print(f"Warning: ELF file {elf_path} not found, generating zeroed data file.")
+        with open(output_path, 'w') as f:
+            for _ in range(mem_depth):
+                f.write("00000000\n")
+        return
+
+    sections = parse_elf_sections(elf_path, {".data", ".sdata", ".rodata", ".sbss", ".bss"})
+    mem_bytes = bytearray(mem_depth * 4)
+
+    # Load file once for copying section contents
+    try:
+        elf_bytes = elf_path.read_bytes()
+    except OSError as e:
+        print(f"Warning: failed to read ELF {elf_path}: {e}")
+        elf_bytes = b""
+
+    for name, stype, addr, off, size in sections:
+        if size == 0:
+            continue
+        rel = addr - base_addr
+        if rel < 0:
+            print(f"Warning: section {name} at 0x{addr:08X} before base 0x{base_addr:08X}, skipped.")
+            continue
+        end = rel + size
+        if end > len(mem_bytes):
+            # Extend to fit the section
+            mem_bytes.extend(b"\x00" * (end - len(mem_bytes)))
+        if size == 0:
+            continue
+
+        if stype == "NOBITS":
+            chunk = b"\x00" * size  # bss/sbss
+        else:
+            chunk = elf_bytes[off:off + size] if off + size <= len(elf_bytes) else b""
+            if len(chunk) < size:
+                chunk = chunk.ljust(size, b"\x00")
+        mem_bytes[rel:end] = chunk
+        print(f"Placed section {name} size {size} at offset 0x{rel:x}")
+
+    with open(output_path, 'w') as f:
+        for i in range(0, len(mem_bytes), 4):
+            word = int.from_bytes(mem_bytes[i:i + 4], 'little')
+            f.write(f"{word:08X}\n")
+    print(f"Generated data file: {output_path}")
+
+
 def generate_config_file(instructions, output_path: str, basename: str):
     """
     Generate a config file with test metadata.
@@ -143,13 +228,16 @@ def main():
     )
     parser.add_argument('--fname', required=True, help='Input dump file path')
     parser.add_argument('--odir', required=True, help='Output directory')
-    parser.add_argument('--base', default='0x10000', help='Base address (default: 0x10000)')
-    parser.add_argument('--depth', type=int, default=65536, help='Memory depth (default: 65536)')
+    parser.add_argument('--base', default='0x10000', help='Instruction base address (default: 0x10000)')
+    parser.add_argument('--data-base', default='0x0', help='Data base address (default: 0x0)')
+    parser.add_argument('--depth', type=int, default=65536, help='Instruction memory depth (words, default: 65536)')
+    parser.add_argument('--data-depth', type=int, default=262144, help='Data memory depth (words, default: 262144)')
     
     args = parser.parse_args()
     
-    # Parse base address
+    # Parse base addresses
     base_addr = int(args.base, 0)
+    data_base_addr = int(args.data_base, 0)
     
     # Get basename
     fname = Path(args.fname)
@@ -172,12 +260,12 @@ def main():
     
     # Generate instruction memory hex file
     generate_hex_file(instructions, exe_path, base_addr, args.depth)
-    
-    # Generate empty data memory file
-    with open(data_path, 'w') as f:
-        for _ in range(1024):  # Default data memory size
-            f.write("00000000\n")
-    print(f"Generated data file: {data_path}")
+
+    # Generate data memory file from ELF (if available)
+    elf_path = fname.with_suffix("") if fname.suffix == ".dump" else fname
+    if elf_path.suffix != ".riscv" and (fname.suffix == ".riscv" or fname.suffixes[-2:] == [".riscv", ".dump"]):
+        elf_path = fname.with_suffix("")  # handle *.riscv.dump
+    generate_data_file(elf_path, data_path, data_base_addr, args.data_depth)
     
     # Generate config file
     generate_config_file(instructions, config_path, basename)

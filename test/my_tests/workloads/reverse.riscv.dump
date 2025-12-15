@@ -1,5 +1,5 @@
 
-/home/louhao/System-2025/RISC-V-CPU-simulator/test/my_tests/workloads/reverse.riscv:     file format elf32-littleriscv
+/home/zhuzemu/homework/RISC-V-CPU-simulator/test/my_tests/workloads/reverse.riscv:     file format elf32-littleriscv
 
 
 Disassembly of section .text:
@@ -32,8 +32,8 @@ Disassembly of section .text:
    10058:	0800006f          	j	100d8 <main+0xc8>
    1005c:	fec42783          	lw	a5,-20(s0)
    10060:	00279793          	slli	a5,a5,0x2
-   10064:	ff040713          	addi	a4,s0,-16
-   10068:	00f707b3          	add	a5,a4,a5
+   10064:	ff078793          	addi	a5,a5,-16
+   10068:	008787b3          	add	a5,a5,s0
    1006c:	fdc7a783          	lw	a5,-36(a5)
    10070:	fef42023          	sw	a5,-32(s0)
    10074:	fe842783          	lw	a5,-24(s0)
@@ -41,21 +41,21 @@ Disassembly of section .text:
    1007c:	fec42783          	lw	a5,-20(s0)
    10080:	40f707b3          	sub	a5,a4,a5
    10084:	00279793          	slli	a5,a5,0x2
-   10088:	ff040713          	addi	a4,s0,-16
-   1008c:	00f707b3          	add	a5,a4,a5
+   10088:	ff078793          	addi	a5,a5,-16
+   1008c:	008787b3          	add	a5,a5,s0
    10090:	fdc7a703          	lw	a4,-36(a5)
    10094:	fec42783          	lw	a5,-20(s0)
    10098:	00279793          	slli	a5,a5,0x2
-   1009c:	ff040693          	addi	a3,s0,-16
-   100a0:	00f687b3          	add	a5,a3,a5
+   1009c:	ff078793          	addi	a5,a5,-16
+   100a0:	008787b3          	add	a5,a5,s0
    100a4:	fce7ae23          	sw	a4,-36(a5)
    100a8:	fe842783          	lw	a5,-24(s0)
    100ac:	fff78713          	addi	a4,a5,-1
    100b0:	fec42783          	lw	a5,-20(s0)
    100b4:	40f707b3          	sub	a5,a4,a5
    100b8:	00279793          	slli	a5,a5,0x2
-   100bc:	ff040713          	addi	a4,s0,-16
-   100c0:	00f707b3          	add	a5,a4,a5
+   100bc:	ff078793          	addi	a5,a5,-16
+   100c0:	008787b3          	add	a5,a5,s0
    100c4:	fe042703          	lw	a4,-32(s0)
    100c8:	fce7ae23          	sw	a4,-36(a5)
    100cc:	fec42783          	lw	a5,-20(s0)
