@@ -241,4 +241,6 @@ deocder_signals = Record(
     is_jalr = Bits(1),
     is_ecall = Bits(1),
     is_ebreak = Bits(1),
+    is_lui = Bits(1),
+    is_auipc = Bits(1),
 )

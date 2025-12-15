@@ -1,54 +1,54 @@
 
-/home/louhao/System-2025/assassyn/examples/minor-cpu/workloads/fib.riscv:     file format elf32-littleriscv
+/home/louhao/System-2025/RISC-V-CPU-simulator/test/my_tests/workloads/fib.riscv:     file format elf32-littleriscv
 
 
 Disassembly of section .text:
 
-00010054 <_start>:
-   10054:	00010137          	lui	sp,0x10
-   10058:	00000097          	auipc	ra,0x0
-   1005c:	00c080e7          	jalr	12(ra) # 10064 <main>
-   10060:	00100073          	ebreak
+00010000 <_start>:
+   10000:	00010137          	lui	sp,0x10
+   10004:	00000097          	auipc	ra,0x0
+   10008:	00c080e7          	jalr	12(ra) # 10010 <main>
+   1000c:	00100073          	ebreak
 
-00010064 <main>:
-   10064:	fd010113          	addi	sp,sp,-48 # ffd0 <_start-0x84>
-   10068:	02812623          	sw	s0,44(sp)
-   1006c:	03010413          	addi	s0,sp,48
-   10070:	00a00793          	li	a5,10
-   10074:	fcf42e23          	sw	a5,-36(s0)
-   10078:	fe042623          	sw	zero,-20(s0)
-   1007c:	00100793          	li	a5,1
-   10080:	fef42423          	sw	a5,-24(s0)
-   10084:	fdc42783          	lw	a5,-36(s0)
-   10088:	00079863          	bnez	a5,10098 <main+0x34>
-   1008c:	fec42783          	lw	a5,-20(s0)
-   10090:	fef42223          	sw	a5,-28(s0)
-   10094:	0480006f          	j	100dc <main+0x78>
-   10098:	00200793          	li	a5,2
-   1009c:	fef42023          	sw	a5,-32(s0)
-   100a0:	0300006f          	j	100d0 <main+0x6c>
-   100a4:	fec42703          	lw	a4,-20(s0)
-   100a8:	fe842783          	lw	a5,-24(s0)
-   100ac:	00f707b3          	add	a5,a4,a5
-   100b0:	fef42223          	sw	a5,-28(s0)
-   100b4:	fe842783          	lw	a5,-24(s0)
-   100b8:	fef42623          	sw	a5,-20(s0)
-   100bc:	fe442783          	lw	a5,-28(s0)
-   100c0:	fef42423          	sw	a5,-24(s0)
-   100c4:	fe042783          	lw	a5,-32(s0)
-   100c8:	00178793          	addi	a5,a5,1
-   100cc:	fef42023          	sw	a5,-32(s0)
-   100d0:	fe042703          	lw	a4,-32(s0)
-   100d4:	fdc42783          	lw	a5,-36(s0)
-   100d8:	fce7d6e3          	bge	a5,a4,100a4 <main+0x40>
-   100dc:	fe442783          	lw	a5,-28(s0)
-   100e0:	00078513          	mv	a0,a5
-   100e4:	00000013          	nop
-   100e8:	00000013          	nop
-   100ec:	00000013          	nop
-   100f0:	00100073          	ebreak
-   100f4:	00000793          	li	a5,0
-   100f8:	00078513          	mv	a0,a5
-   100fc:	02c12403          	lw	s0,44(sp)
-   10100:	03010113          	addi	sp,sp,48
-   10104:	00008067          	ret
+00010010 <main>:
+   10010:	fd010113          	addi	sp,sp,-48 # ffd0 <_start-0x30>
+   10014:	02812623          	sw	s0,44(sp)
+   10018:	03010413          	addi	s0,sp,48
+   1001c:	00a00793          	li	a5,10
+   10020:	fcf42e23          	sw	a5,-36(s0)
+   10024:	fe042623          	sw	zero,-20(s0)
+   10028:	00100793          	li	a5,1
+   1002c:	fef42423          	sw	a5,-24(s0)
+   10030:	fdc42783          	lw	a5,-36(s0)
+   10034:	00079863          	bnez	a5,10044 <main+0x34>
+   10038:	fec42783          	lw	a5,-20(s0)
+   1003c:	fef42223          	sw	a5,-28(s0)
+   10040:	0480006f          	j	10088 <main+0x78>
+   10044:	00200793          	li	a5,2
+   10048:	fef42023          	sw	a5,-32(s0)
+   1004c:	0300006f          	j	1007c <main+0x6c>
+   10050:	fec42703          	lw	a4,-20(s0)
+   10054:	fe842783          	lw	a5,-24(s0)
+   10058:	00f707b3          	add	a5,a4,a5
+   1005c:	fef42223          	sw	a5,-28(s0)
+   10060:	fe842783          	lw	a5,-24(s0)
+   10064:	fef42623          	sw	a5,-20(s0)
+   10068:	fe442783          	lw	a5,-28(s0)
+   1006c:	fef42423          	sw	a5,-24(s0)
+   10070:	fe042783          	lw	a5,-32(s0)
+   10074:	00178793          	addi	a5,a5,1
+   10078:	fef42023          	sw	a5,-32(s0)
+   1007c:	fe042703          	lw	a4,-32(s0)
+   10080:	fdc42783          	lw	a5,-36(s0)
+   10084:	fce7d6e3          	bge	a5,a4,10050 <main+0x40>
+   10088:	fe442783          	lw	a5,-28(s0)
+   1008c:	00078513          	mv	a0,a5
+   10090:	00000013          	nop
+   10094:	00000013          	nop
+   10098:	00000013          	nop
+   1009c:	00100073          	ebreak
+   100a0:	00000793          	li	a5,0
+   100a4:	00078513          	mv	a0,a5
+   100a8:	02c12403          	lw	s0,44(sp)
+   100ac:	03010113          	addi	sp,sp,48
+   100b0:	00008067          	ret

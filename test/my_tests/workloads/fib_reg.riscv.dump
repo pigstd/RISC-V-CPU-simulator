@@ -1,0 +1,24 @@
+
+workloads/fib_reg.riscv:     file format elf32-littleriscv
+
+
+Disassembly of section .text:
+
+00010000 <_start>:
+   10000:	00000293          	li	t0,0
+   10004:	00100313          	li	t1,1
+   10008:	00200e13          	li	t3,2
+   1000c:	00a00e93          	li	t4,10
+
+00010010 <fib_loop>:
+   10010:	006283b3          	add	t2,t0,t1
+   10014:	00030293          	mv	t0,t1
+   10018:	00038313          	mv	t1,t2
+   1001c:	001e0e13          	addi	t3,t3,1
+   10020:	ffced8e3          	bge	t4,t3,10010 <fib_loop>
+   10024:	00030513          	mv	a0,t1
+   10028:	00000013          	nop
+   1002c:	00000013          	nop
+   10030:	00000013          	nop
+   10034:	00100073          	ebreak
+   10038:	00000013          	nop

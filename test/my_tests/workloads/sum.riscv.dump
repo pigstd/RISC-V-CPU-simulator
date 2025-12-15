@@ -1,0 +1,43 @@
+
+/home/louhao/System-2025/RISC-V-CPU-simulator/test/my_tests/workloads/sum.riscv:     file format elf32-littleriscv
+
+
+Disassembly of section .text:
+
+00010000 <_start>:
+   10000:	00010137          	lui	sp,0x10
+   10004:	00000097          	auipc	ra,0x0
+   10008:	00c080e7          	jalr	12(ra) # 10010 <main>
+   1000c:	00100073          	ebreak
+
+00010010 <main>:
+   10010:	fe010113          	addi	sp,sp,-32 # ffe0 <_start-0x20>
+   10014:	00812e23          	sw	s0,28(sp)
+   10018:	02010413          	addi	s0,sp,32
+   1001c:	00a00793          	li	a5,10
+   10020:	fef42223          	sw	a5,-28(s0)
+   10024:	fe042623          	sw	zero,-20(s0)
+   10028:	00100793          	li	a5,1
+   1002c:	fef42423          	sw	a5,-24(s0)
+   10030:	0200006f          	j	10050 <main+0x40>
+   10034:	fec42703          	lw	a4,-20(s0)
+   10038:	fe842783          	lw	a5,-24(s0)
+   1003c:	00f707b3          	add	a5,a4,a5
+   10040:	fef42623          	sw	a5,-20(s0)
+   10044:	fe842783          	lw	a5,-24(s0)
+   10048:	00178793          	addi	a5,a5,1
+   1004c:	fef42423          	sw	a5,-24(s0)
+   10050:	fe842703          	lw	a4,-24(s0)
+   10054:	fe442783          	lw	a5,-28(s0)
+   10058:	fce7dee3          	bge	a5,a4,10034 <main+0x24>
+   1005c:	fec42783          	lw	a5,-20(s0)
+   10060:	00078513          	mv	a0,a5
+   10064:	00000013          	nop
+   10068:	00000013          	nop
+   1006c:	00000013          	nop
+   10070:	00100073          	ebreak
+   10074:	00000793          	li	a5,0
+   10078:	00078513          	mv	a0,a5
+   1007c:	01c12403          	lw	s0,28(sp)
+   10080:	02010113          	addi	sp,sp,32
+   10084:	00008067          	ret

@@ -1,0 +1,15 @@
+
+workloads/shift_test.riscv:     file format elf32-littleriscv
+
+
+Disassembly of section .text:
+
+00010000 <_start>:
+   10000:	00100293          	li	t0,1
+   10004:	00429293          	slli	t0,t0,0x4
+   10008:	0022d513          	srli	a0,t0,0x2
+   1000c:	00000013          	nop
+   10010:	00000013          	nop
+   10014:	00000013          	nop
+   10018:	00100073          	ebreak
+   1001c:	00000013          	nop

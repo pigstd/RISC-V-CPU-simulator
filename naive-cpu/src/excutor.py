@@ -41,7 +41,14 @@ def executor_logic(signals, regs: RegArray, pc_reg: RegArray, dcache: SRAM):
     log("executor operands: rs1_val={} rs2_val={} op2={} shamt={}", rs1_val, rs2_val, op2, shamt)
 
     # one-hot 选择 ALU 结果
-    alu_res = signals.alu_type.select1hot(*alu_candidates)
+    alu_res_basic = signals.alu_type.select1hot(*alu_candidates)
+    
+    # LUI: rd = imm (imm 已经是左移12位后的值)
+    # AUIPC: rd = PC + imm
+    lui_res = imm_val
+    auipc_res = (pc_addr + imm_val).bitcast(UInt(32))
+    alu_res = signals.is_lui.select(lui_res,
+              signals.is_auipc.select(auipc_res, alu_res_basic))
 
     log("executor mem flags: mem_read={}, mem_write={}, branch={}", signals.mem_read, signals.mem_write, signals.is_branch)
 
@@ -56,11 +63,13 @@ def executor_logic(signals, regs: RegArray, pc_reg: RegArray, dcache: SRAM):
     misaligned = (eff_addr & UInt(32)(0b11)) != UInt(32)(0)
     mem_re = signals.mem_read & ~misaligned
     mem_we = signals.mem_write & ~misaligned
+    # 字节地址转字地址（右移2位）
+    word_addr = (eff_addr >> UInt(32)(2)).bitcast(UInt(32))
     # 触发 dcache 访问（异步 dout）
     dcache.build(
         we=mem_we.bitcast(Bits(1)),
         re=mem_re.bitcast(Bits(1)),
-        addr=eff_addr,
+        addr=word_addr,
         wdata=rs2_val.bitcast(Bits(32)),
     )
     with Condition(signals.mem_read | signals.mem_write):

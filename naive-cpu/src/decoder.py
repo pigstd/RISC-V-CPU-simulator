@@ -39,10 +39,29 @@ def decoder_logic(inst):
 
     imm_used = is_I | is_I_star | is_S | is_B | is_U | is_J
     imm_zero = Bits(32)(0)
-    imm_I_sext = I_imm.sext(Int(32)).bitcast(Bits(32))
-    imm_S_sext = S_imm.sext(Int(32)).bitcast(Bits(32))
-    imm_B_sext = B_imm.sext(Int(32)).bitcast(Bits(32))
-    imm_J_sext = J_imm.sext(Int(32)).bitcast(Bits(32))
+    
+    # 手动符号扩展：使用 select 根据符号位选择扩展值
+    # I-type: 12位立即数 -> 32位
+    I_sign = I_imm[11:11]  # 符号位
+    I_high = I_sign.select(Bits(20)(0xFFFFF), Bits(20)(0))
+    imm_I_sext = concat(I_high, I_imm)
+    
+    # S-type: 12位立即数 -> 32位
+    S_sign = S_imm[11:11]
+    S_high = S_sign.select(Bits(20)(0xFFFFF), Bits(20)(0))
+    imm_S_sext = concat(S_high, S_imm)
+    
+    # B-type: 13位立即数 -> 32位
+    B_sign = B_imm[12:12]
+    B_high = B_sign.select(Bits(19)(0x7FFFF), Bits(19)(0))
+    imm_B_sext = concat(B_high, B_imm)
+    
+    # J-type: 21位立即数 -> 32位
+    J_sign = J_imm[20:20]
+    J_high = J_sign.select(Bits(11)(0x7FF), Bits(11)(0))
+    imm_J_sext = concat(J_high, J_imm)
+    
+    # U-type: 直接左移12位
     imm_U_shifted = concat(U_imm, Bits(12)(0))
     imm_Istar_zext = I_star_imm.zext(Bits(32))
     imm = is_I.select(imm_I_sext,
@@ -66,6 +85,8 @@ def decoder_logic(inst):
     is_jalr = is_eq.get("jalr", Bits(1)(0))
     is_ecall = ecall
     is_ebreak = ebreak
+    is_lui = is_eq.get("lui", Bits(1)(0))
+    is_auipc = is_eq.get("auipc", Bits(1)(0))
 
     # ALU 类型：优先 R > I > I*
     alu_type = is_R.select(R_alu,
@@ -100,4 +121,6 @@ def decoder_logic(inst):
         is_jalr=is_jalr,
         is_ecall=is_ecall,
         is_ebreak=is_ebreak,
+        is_lui=is_lui,
+        is_auipc=is_auipc,
     )
