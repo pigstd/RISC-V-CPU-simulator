@@ -17,3 +17,5 @@ build/
 /playground
 
 workspace/
+__pycache__/
+.sim-runtime-cache/

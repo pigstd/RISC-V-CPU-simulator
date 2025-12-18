@@ -1,0 +1,35 @@
+
+/home/zhuzemu/homework/RISC-V-CPU-simulator/test/my_tests/workloads/shift_test/shift_test.riscv:     file format elf32-littleriscv
+
+
+Disassembly of section .text:
+
+00010000 <_start>:
+   10000:	00010137          	lui	sp,0x10
+   10004:	00000097          	auipc	ra,0x0
+   10008:	00c080e7          	jalr	12(ra) # 10010 <main>
+   1000c:	00100073          	ebreak
+
+00010010 <main>:
+   10010:	fe010113          	addi	sp,sp,-32 # ffe0 <_start-0x20>
+   10014:	00812e23          	sw	s0,28(sp)
+   10018:	02010413          	addi	s0,sp,32
+   1001c:	00100793          	li	a5,1
+   10020:	fef42623          	sw	a5,-20(s0)
+   10024:	fec42783          	lw	a5,-20(s0)
+   10028:	00479793          	slli	a5,a5,0x4
+   1002c:	fef42623          	sw	a5,-20(s0)
+   10030:	fec42783          	lw	a5,-20(s0)
+   10034:	0027d793          	srli	a5,a5,0x2
+   10038:	fef42623          	sw	a5,-20(s0)
+   1003c:	fec42783          	lw	a5,-20(s0)
+   10040:	00078513          	mv	a0,a5
+   10044:	00000013          	nop
+   10048:	00000013          	nop
+   1004c:	00000013          	nop
+   10050:	00100073          	ebreak
+   10054:	00000793          	li	a5,0
+   10058:	00078513          	mv	a0,a5
+   1005c:	01c12403          	lw	s0,28(sp)
+   10060:	02010113          	addi	sp,sp,32
+   10064:	00008067          	ret
