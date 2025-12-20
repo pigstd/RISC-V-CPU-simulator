@@ -74,8 +74,9 @@ class Executor(Module):
     @module.combinational
     def build(self, regs: RegArray, pc_reg: RegArray, memoryaccess: MemoryAccess, dcache: SRAM):
         signals = self.pop_all_ports(True)
-        rd_data = executor_logic(signals, regs, pc_reg, dcache)
+        rd_data, ex_branch_taken, ex_pc_next = executor_logic(signals, regs, pc_reg, dcache)
         memoryaccess.async_called(decoder_result=signals, wdata=rd_data)
+        return ex_branch_taken, ex_pc_next
 
 
 class Decoder(Module):
@@ -98,6 +99,10 @@ class Decoder(Module):
         decoder_result = decoder_logic(inst=instr)
         executor.async_called(decoder_result=decoder_result)
 
+        # is_branch, pc_addr, is_valid
+        # is_valid 应该在 decoder 的时候放进去，但是现在还没有写
+        return decoder_result.is_branch, pc_addr, Bits(1)(1)
+
 class Fetcher(Module):
     def __init__(self):
         super().__init__(
@@ -110,18 +115,67 @@ class Fetcher(Module):
               pc_reg: RegArray):
         pc_addr = pc_reg[0]
 
-        log("fetch stage pc addr: {}", pc_addr)
+        # log("fetch stage pc addr: {}", pc_addr)
 
         # 由于是 naive CPU，所以要取的肯定就是 pc_addr 对应的指令
         # PC 是字节地址，SRAM 按字（word）索引，需要右移2位
-        word_addr = (pc_addr >> UInt(32)(2)).bitcast(UInt(32))
-        icache.build(we=Bits(1)(0),
-                     re=Bits(1)(1),
-                     addr=word_addr,
-                     wdata=Bits(32)(0))
-        decoder.async_called(pc_addr=pc_addr)
+        # word_addr = (pc_addr >> UInt(32)(2)).bitcast(UInt(32))
+        # icache.build(we=Bits(1)(0),
+        #              re=Bits(1)(1),
+        #              addr=word_addr,
+        #              wdata=Bits(32)(0))
+        # decoder.async_called(pc_addr=pc_addr)
 
         return pc_reg, pc_addr
+
+class FetcherImpl(Downstream):
+    def __init__(self):
+        super().__init__()
+    # FetcherImpl 完成了 Fetcher 的下游接口
+    # 需要 Decoder 的时候知道上一条是不是 分支指令
+    # 如果是，那么就要停，
+    # 下个cycle 应该 ex_is_brach 满足，并且直接从 ex_pc_bypass 取地址
+    # 如果数据 invalid，这个时候应该重新 fetch 同一条指令（decoder 用过的的指令）
+    # invalid 的优先级高，也就是说，如果 invalid，那么一定是要取 decoder_pc_addr 的地址
+    # 否则就继续取指
+    @downstream.combinational
+    def build(self,
+              is_branch : Value,
+              is_valid : Value,
+              pc_reg : RegArray,
+              pc_addr : Value,
+              decoder_pc_addr : Value,
+              ex_is_branch : Value,
+              ex_pc_bypass : Value,
+              icache : SRAM,
+              decoder : Decoder):
+        is_branch = is_branch.optional(Bits(1)(0))
+        is_valid = is_valid.optional(Bits(1)(1))
+        ex_is_branch = ex_is_branch.optional(Bits(1)(0))
+        ex_pc_bypass = ex_pc_bypass.optional(UInt(32)(0))
+        decoder_pc_addr = decoder_pc_addr.optional(UInt(32)(0))
+
+        # 如果 上一条不是分支，或者数据 invalid，那么都需要 fetch
+        need_fetch = (~is_branch) | (~is_valid)
+
+        fetch_pc_addr = is_valid.select(
+            ex_is_branch.select(ex_pc_bypass, pc_addr),
+            decoder_pc_addr)
+
+        word_addr = (pc_addr >> UInt(32)(2)).bitcast(UInt(32))
+        icache.build(we=Bits(1)(0),
+                     re=need_fetch,
+                     addr=word_addr,
+                     wdata=Bits(32)(0))
+        
+        with Condition(need_fetch):
+            pc_reg[0] <= fetch_pc_addr + UInt(32)(4)
+            decoder.async_called(pc_addr=fetch_pc_addr)
+            log("fetch stage pc addr: {}", fetch_pc_addr)
+        with Condition(~need_fetch):
+            # 保持为这个 decoder 出来的地址，这样之后修改就不会错
+            pc_reg[0] <= decoder_pc_addr  
+            log("fetch stage hold pc addr: {}", decoder_pc_addr)
 
 class Driver(Module):
     def __init__(self):
@@ -163,12 +217,22 @@ def build_naive_CPU(depth_log=18):
         decoder = Decoder()
         fetcher = Fetcher()
         driver = Driver()
+        fetcherimpl = FetcherImpl()
         writeback.build(regs=regs, fetcher=fetcher)
         memoryaccess.build(dcache=dcache, regs=regs, writeback=writeback)
-        decoder.build(icache=icache, executor=executor)
+        is_branch, decoder_pc_reg, is_valid = decoder.build(icache=icache, executor=executor)
         pc_reg, pc_addr = fetcher.build(icache=icache, decoder=decoder, pc_reg=pc_reg)
         driver.build(fecher=fetcher)
-        executor.build(regs=regs, pc_reg=pc_reg, memoryaccess=memoryaccess, dcache=dcache)
+        ex_branch_taken, ex_pc_next = executor.build(regs=regs, pc_reg=pc_reg, memoryaccess=memoryaccess, dcache=dcache)
+        fetcherimpl.build(is_branch=is_branch,
+                          is_valid=is_valid,
+                          pc_reg=pc_reg,
+                          pc_addr=pc_addr,
+                          decoder_pc_addr=decoder_pc_reg,
+                          ex_is_branch=ex_branch_taken,
+                          ex_pc_bypass=ex_pc_next,
+                          icache=icache,
+                          decoder=decoder)
     return sys
 
 def main():

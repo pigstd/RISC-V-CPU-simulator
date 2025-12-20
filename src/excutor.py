@@ -113,7 +113,8 @@ def executor_logic(signals, regs: RegArray, pc_reg: RegArray, dcache: SRAM):
     pc_default = link_addr  # 默认下一条
     pc_next = branch_taken.select(pc_target_aligned, pc_default)
     log("executor pc flow: default_next={} target={} taken={} jal_like={}", pc_default, pc_target_aligned, branch_taken, is_jal_like)
-    pc_reg[0] <= pc_next
+    # 现在不在 ex 阶段更新 pc_reg，会把这个 pc_next 传给 Fetchimpl 直接让他去 fetch 这个
+    # pc_reg[0] <= pc_next
 
     # EX 仅产生写回数据意图，实际写回在 MA/WB
     rd_data = is_jal_like.select(link_addr, alu_res)
@@ -121,4 +122,4 @@ def executor_logic(signals, regs: RegArray, pc_reg: RegArray, dcache: SRAM):
     rd_data = sys_trap.select(UInt(32)(0), rd_data)
 
     log("executor: rs1={} rs2={} op2={} alu_res={} pc_next={}", rs1_val, rs2_val, op2, alu_res, pc_next)
-    return rd_data.bitcast(Bits(32))
+    return rd_data.bitcast(Bits(32)), branch_taken, pc_next
