@@ -101,7 +101,8 @@ class Decoder(Module):
 
         # is_branch, pc_addr, is_valid
         # is_valid 应该在 decoder 的时候放进去，但是现在还没有写
-        return decoder_result.is_branch, pc_addr, Bits(1)(1)
+        is_valid = decoder_result.is_branch.select(Bits(1)(1), Bits(1)(1))
+        return decoder_result.is_branch, pc_addr, is_valid
 
 class Fetcher(Module):
     def __init__(self):
@@ -189,16 +190,16 @@ class Driver(Module):
         with Condition(is_init[0] == UInt(1)(1)):
             is_init[0] <= UInt(1)(0)
             fecher.async_called()
-            log("Naive CPU Simulation Started")
-        # with Condition(is_init[0] == UInt(1)(0)):
-            # log("Naive CPU Simulation Running")
+            log("CPU Simulation Started")
+        with Condition(is_init[0] == UInt(1)(0)):
+            fecher.async_called()
 
 
 current_path = os.path.dirname(os.path.abspath(__file__))
 workspace = f'{current_path}/workspace/'
 
-def build_naive_CPU(depth_log=18):
-    sys = SysBuilder("Naive-CPU")
+def build_CPU(depth_log=18):
+    sys = SysBuilder("CPU")
     with sys:
         icache = SRAM(width= 32,
                       depth= 1 << depth_log,
@@ -239,12 +240,12 @@ def main():
     import argparse
 
     # --sim-threshold 100 --idle-threshold 100 设置模拟器参数
-    parser = argparse.ArgumentParser(description="Run Naive CPU simulator")
+    parser = argparse.ArgumentParser(description="Run CPU simulator")
     parser.add_argument("--sim-threshold", type=int, default=100, help="max simulation steps")
     parser.add_argument("--idle-threshold", type=int, default=100, help="idle cycles before stop")
     args = parser.parse_args()
 
-    sys = build_naive_CPU(depth_log = 18)
+    sys = build_CPU(depth_log = 18)
     cfg = backend.config(
         resource_base='.',
         verilog=True,
