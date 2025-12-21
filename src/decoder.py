@@ -3,7 +3,7 @@ from instruction import *
 
 
 @rewrite_assign
-def decoder_logic(inst):
+def decoder_logic(inst, reg_to_write : RegArray):
     is_eq = {}
     [is_R, R_rs1, R_rs2, R_rd, R_alu] = decoder_R_type(inst=inst, is_eq=is_eq)
     [is_I, I_rs1, I_imm, I_rd, I_alu] = decoder_I_type(inst=inst, is_eq=is_eq)
@@ -92,6 +92,14 @@ def decoder_logic(inst):
     alu_type = is_R.select(R_alu,
                is_I.select(I_alu,
                is_I_star.select(I_star_alu, Bits(RV32I_ALU.CNT)(1 << RV32I_ALU.ALU_NONE))))
+    
+    rs1_valid = rs1_used.select(reg_to_write[rs1] == UInt(32)(0), Bits(1)(1))
+    rs2_valid = rs2_used.select(reg_to_write[rs2] == UInt(32)(0), Bits(1)(1))
+    
+    is_valid = rs1_valid & rs2_valid
+
+    with Condition(is_valid & rd_used):
+        reg_to_write[rd] <= reg_to_write[rd] + UInt(32)(1)
 
     log("decoder type flags: R={} I={} I*={} S={} B={} U={} J={} ecall={} ebreak={}",
         is_R, is_I, is_I_star, is_S, is_B, is_U, is_J, ecall, ebreak)
@@ -123,4 +131,5 @@ def decoder_logic(inst):
         is_ebreak=is_ebreak,
         is_lui=is_lui,
         is_auipc=is_auipc,
+        is_valid=is_valid,
     )

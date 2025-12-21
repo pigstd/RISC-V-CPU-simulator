@@ -243,4 +243,5 @@ deocder_signals = Record(
     is_ebreak = Bits(1),
     is_lui = Bits(1),
     is_auipc = Bits(1),
+    is_valid = Bits(1),
 )

@@ -14,11 +14,13 @@ class WriteBack(Module):
                 }
         )
     @module.combinational
-    def build(self, regs: RegArray, fetcher):
+    def build(self, regs: RegArray, fetcher, reg_to_write: RegArray):
         rd, data = self.pop_all_ports(True)
         with Condition(rd != Bits(5)(0)):
             regs[rd] <= data.bitcast(UInt(32))
             log("writeback stage: rd = {} data = {}", rd, data)
+            # 写回后，目标寄存器待写入数减一
+            reg_to_write[rd] <= reg_to_write[rd] - UInt(32)(1)
         fetcher.async_called()
 
 class MemoryAccess(Module):
@@ -68,14 +70,19 @@ class MemoryAccess(Module):
 class Executor(Module):
     def __init__(self):
         super().__init__(
-            ports={"decoder_result": Port(deocder_signals)}
+            ports={"decoder_result": Port(deocder_signals),
+                   "pc_addr": Port(UInt(32))}
         )
 
     @module.combinational
     def build(self, regs: RegArray, pc_reg: RegArray, memoryaccess: MemoryAccess, dcache: SRAM):
-        signals = self.pop_all_ports(True)
-        rd_data, ex_branch_taken, ex_pc_next = executor_logic(signals, regs, pc_reg, dcache)
-        memoryaccess.async_called(decoder_result=signals, wdata=rd_data)
+        decoder_result, pc_addr = self.pop_all_ports(True)
+        rd_data, ex_branch_taken, ex_pc_next = executor_logic(
+            signals = decoder_result,
+            regs = regs,
+            pc_addr= pc_addr,
+            dcache = dcache)
+        memoryaccess.async_called(decoder_result=decoder_result, wdata=rd_data)
         return ex_branch_taken, ex_pc_next
 
 
@@ -87,7 +94,8 @@ class Decoder(Module):
     @module.combinational
     def build(self,
               icache: SRAM,
-              executor: Executor):
+              executor: Executor,
+              reg_to_write: RegArray):
         pc_addr = self.pop_all_ports(True)
         instr = icache.dout[0]
         opcode = instr[0:6]
@@ -96,13 +104,14 @@ class Decoder(Module):
         log("decoder fetch pc={} instr=0x{:08x} opcode={:07b} funct3={:03b} funct7={:07b}",
             pc_addr, instr, opcode, funct3, funct7)
 
-        decoder_result = decoder_logic(inst=instr)
-        executor.async_called(decoder_result=decoder_result)
-
+        decoder_result = decoder_logic(inst=instr, reg_to_write=reg_to_write)
+        with Condition(decoder_result.is_valid):
+            executor.async_called(decoder_result=decoder_result, pc_addr=pc_addr)
+        with Condition(~decoder_result.is_valid):
+            log("decoder invalid instruction at pc={}: instr=0x{:08x}", pc_addr, instr)
         # is_branch, pc_addr, is_valid
         # is_valid 应该在 decoder 的时候放进去，但是现在还没有写
-        is_valid = decoder_result.is_branch.select(Bits(1)(1), Bits(1)(1))
-        return decoder_result.is_branch, pc_addr, is_valid
+        return decoder_result.is_branch, pc_addr, decoder_result.is_valid
 
 class Fetcher(Module):
     def __init__(self):
@@ -211,6 +220,8 @@ def build_CPU(depth_log=18):
         dcache.name = "dcache"
         regs = RegArray(UInt(32), 32, initializer=[0]*32)
         pc_reg = RegArray(UInt(32), 1, initializer=[0])
+        # 每个寄存器有多少个指令要写入但是还没有写入
+        reg_to_write = RegArray(UInt(32), 32, initializer=[0]*32)
 
         writeback = WriteBack()
         memoryaccess = MemoryAccess()
@@ -219,9 +230,9 @@ def build_CPU(depth_log=18):
         fetcher = Fetcher()
         driver = Driver()
         fetcherimpl = FetcherImpl()
-        writeback.build(regs=regs, fetcher=fetcher)
+        writeback.build(regs=regs, fetcher=fetcher, reg_to_write=reg_to_write)
         memoryaccess.build(dcache=dcache, regs=regs, writeback=writeback)
-        is_branch, decoder_pc_reg, is_valid = decoder.build(icache=icache, executor=executor)
+        is_branch, decoder_pc_reg, is_valid = decoder.build(icache=icache, executor=executor, reg_to_write=reg_to_write)
         pc_reg, pc_addr = fetcher.build(icache=icache, decoder=decoder, pc_reg=pc_reg)
         driver.build(fecher=fetcher)
         ex_branch_taken, ex_pc_next = executor.build(regs=regs, pc_reg=pc_reg, memoryaccess=memoryaccess, dcache=dcache)

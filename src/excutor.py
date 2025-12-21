@@ -3,8 +3,7 @@ from instruction import *
 
 
 @rewrite_assign
-def executor_logic(signals, regs: RegArray, pc_reg: RegArray, dcache: SRAM):
-    pc_addr = pc_reg[0]
+def executor_logic(signals, regs: RegArray, pc_addr: Value, dcache: SRAM):
 
     # 取寄存器值
     rs1_val = signals.rs1_used.select(regs[signals.rs1], UInt(32)(0))
