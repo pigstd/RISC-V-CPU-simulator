@@ -98,7 +98,7 @@ def decoder_logic(inst, reg_to_write : RegArray):
     
     is_valid = rs1_valid & rs2_valid
 
-    with Condition(is_valid & rd_used):
+    with Condition(is_valid & rd_used & (rd != Bits(5)(0))):
         reg_to_write[rd] <= reg_to_write[rd] + UInt(32)(1)
 
     log("decoder type flags: R={} I={} I*={} S={} B={} U={} J={} ecall={} ebreak={}",

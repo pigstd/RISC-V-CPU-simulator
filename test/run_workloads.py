@@ -48,7 +48,7 @@ def locate_workload(name: str):
     return None, None
 
 
-def run_one(name: str, sim_threshold: int = 500000, idle_threshold: int = 500000):
+def run_one(name: str, sim_threshold: int = 5000, idle_threshold: int = 5000):
     exe, data = locate_workload(name)
     if exe is None or data is None:
         return False, f"missing workload files for {name}"
