@@ -168,11 +168,14 @@ class FetcherImpl(Downstream):
         # 如果 上一条不是分支，或者数据 invalid，那么都需要 fetch
         need_fetch = (~is_branch) | (~is_valid)
 
+        log("fetcher: is_branch={} is_valid={} ex_is_branch={} pc_addr={} decoder_pc_addr={}",
+            is_branch, is_valid, ex_is_branch, pc_addr, decoder_pc_addr)
+
         fetch_pc_addr = is_valid.select(
             ex_is_branch.select(ex_pc_bypass, pc_addr),
             decoder_pc_addr)
 
-        word_addr = (pc_addr >> UInt(32)(2)).bitcast(UInt(32))
+        word_addr = (fetch_pc_addr >> UInt(32)(2)).bitcast(UInt(32))
         icache.build(we=Bits(1)(0),
                      re=need_fetch,
                      addr=word_addr,
