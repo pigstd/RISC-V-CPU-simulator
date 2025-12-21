@@ -18,7 +18,9 @@ CFLAGS="-march=rv32i -mabi=ilp32 -O0 -nostdlib -static -Wl,--no-relax"
 mkdir -p "$WORKLOAD_DIR"
 
 # 所有测试程序列表 (仅使用 RV32I 指令)
-TESTS=("fib" "sort" "factorial" "sum" "bitcount" "max" "reverse" "shift_test")
+TESTS=("simple_add" "loop_sum" "fib_reg" "fib" "sort" "factorial" "sum" "bitcount" "max" "reverse" "shift_test")
+# 这些测试自己定义了 _start，不需要链接通用的 start.S
+NO_START_TESTS=("simple_add" "loop_sum" "fib_reg")
 
 # 跳过需要乘法/除法的测试 (RV32I 不支持)
 SKIP_TESTS=("gcd" "prime")
@@ -38,9 +40,14 @@ for TEST in "${TESTS[@]}"; do
     mkdir -p "$TEST_DIR"
 
     # 编译
+    EXTRA_OBJECTS=()
+    if [[ ! " ${NO_START_TESTS[*]} " =~ " ${TEST} " ]]; then
+        EXTRA_OBJECTS+=("$SRC_DIR/start.S")
+    fi
+
     $CC $CFLAGS \
         -T"$SCRIPT_DIR/link.ld" \
-        "$SRC_DIR/start.S" \
+        "${EXTRA_OBJECTS[@]}" \
         "$SRC_FILE" \
         -o "$TEST_DIR/$TEST.riscv" 2>&1
     

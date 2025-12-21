@@ -190,8 +190,9 @@ def main():
     )
     sim,vcd = elaborate(sys=sys, **cfg)
     output = run_simulator(sim)
-    print("simulate output:")
-    print(output)
+    print("simulate output is written in /workspace/log")
+    with open(f"{workspace}/log", "w") as f:
+        print(output, file = f)
 
 if __name__ == "__main__":
     main()

@@ -72,8 +72,14 @@ def run_one(name: str, sim_threshold: int = 500000, idle_threshold: int = 500000
     if proc.returncode != 0:
         return False, f"simulator exited with {proc.returncode}\n{proc.stderr}"
 
+    log_file = WORKSPACE_DIR / "log"
+    if log_file.exists():
+        log_text = log_file.read_text()
+    else:
+        log_text = proc.stdout
+
     matches = []
-    for rd_str, data_str in LOG_PATTERN.findall(proc.stdout):
+    for rd_str, data_str in LOG_PATTERN.findall(log_text):
         try:
             rd_val = int(rd_str, 0)
         except ValueError:
