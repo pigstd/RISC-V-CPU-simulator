@@ -121,4 +121,4 @@ def executor_logic(signals, regs: RegArray, pc_addr: Value, dcache: SRAM):
     rd_data = sys_trap.select(UInt(32)(0), rd_data)
 
     log("executor: rs1={} rs2={} op2={} alu_res={} pc_next={}", rs1_val, rs2_val, op2, alu_res, pc_next)
-    return rd_data.bitcast(Bits(32)), branch_taken, pc_next
+    return rd_data.bitcast(Bits(32)), signals.is_branch, pc_next

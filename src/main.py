@@ -166,7 +166,7 @@ class FetcherImpl(Downstream):
         decoder_pc_addr = decoder_pc_addr.optional(UInt(32)(0))
 
         # 如果 上一条不是分支，或者数据 invalid，那么都需要 fetch
-        need_fetch = (~is_branch) | (~is_valid)
+        need_fetch = (~is_branch) | (~is_valid) 
 
         log("fetcher: is_branch={} is_valid={} ex_is_branch={} pc_addr={} decoder_pc_addr={}",
             is_branch, is_valid, ex_is_branch, pc_addr, decoder_pc_addr)
