@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Batch-run prebuilt workloads against the naive CPU simulator and check a0.
+Batch-run prebuilt workloads against the CPU simulator and check a0.
 
 Usage:
-    python naive-cpu/test/run_workloads.py            # run all known cases
-    python naive-cpu/test/run_workloads.py fib sum    # run selected cases
+    python test/run_workloads.py            # run all known cases
+    python test/run_workloads.py fib sum    # run selected cases
 """
 
 import re
@@ -13,10 +13,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKLOAD_DIR = REPO_ROOT / "test" / "my_tests" / "workloads"
-WORKSPACE_DIR = REPO_ROOT / "naive-cpu" / "src" / "workspace"
-SIM_ENTRY = REPO_ROOT / "naive-cpu" / "src" / "main.py"
+WORKSPACE_DIR = REPO_ROOT / "src" / "workspace"
+SIM_ENTRY = REPO_ROOT / "src" / "main.py"
 
 # Expected a0 values for each workload
 EXPECTED = {
@@ -48,7 +48,7 @@ def locate_workload(name: str):
     return None, None
 
 
-def run_one(name: str, sim_threshold: int = 500000, idle_threshold: int = 500000):
+def run_one(name: str, sim_threshold: int = 5000, idle_threshold: int = 5000):
     exe, data = locate_workload(name)
     if exe is None or data is None:
         return False, f"missing workload files for {name}"
