@@ -34,7 +34,6 @@ def decoder_R_type(inst, is_eq):
         alu_type = eq.select(alu_onehot, alu_type)
         with Condition(eq):
             log(f"Decoded R-type instruction: {name}")
-    log("Is R-type instruction: {}", is_R)
     return is_R, rs1, rs2, rd, alu_type
 
 @rewrite_assign

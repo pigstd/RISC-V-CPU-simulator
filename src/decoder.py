@@ -101,9 +101,6 @@ def decoder_logic(inst, reg_to_write : RegArray):
     with Condition(is_valid & rd_used & (rd != Bits(5)(0))):
         reg_to_write[rd] <= reg_to_write[rd] + UInt(32)(1)
 
-    log("decoder type flags: R={} I={} I*={} S={} B={} U={} J={} ecall={} ebreak={}",
-        is_R, is_I, is_I_star, is_S, is_B, is_U, is_J, ecall, ebreak)
-    log("decoder: imm(raw)={} imm(signed)={}", imm, imm.bitcast(Int(32)))
     log("decoder: rs1_used = {} , rs1 = {}", rs1_used, rs1)
     log("decoder: rs2_used = {} , rs2 = {}", rs2_used, rs2)
     log("decoder: rd_used = {} , rd = {}", rd_used, rd)

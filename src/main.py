@@ -110,7 +110,6 @@ class Decoder(Module):
         with Condition(~decoder_result.is_valid):
             log("decoder invalid instruction at pc={}: instr=0x{:08x}", pc_addr, instr)
         # is_branch, pc_addr, is_valid
-        # is_valid 应该在 decoder 的时候放进去，但是现在还没有写
         return decoder_result.is_branch, pc_addr, decoder_result.is_valid
 
 class Fetcher(Module):
@@ -126,15 +125,6 @@ class Fetcher(Module):
         pc_addr = pc_reg[0]
 
         # log("fetch stage pc addr: {}", pc_addr)
-
-        # 由于是 naive CPU，所以要取的肯定就是 pc_addr 对应的指令
-        # PC 是字节地址，SRAM 按字（word）索引，需要右移2位
-        # word_addr = (pc_addr >> UInt(32)(2)).bitcast(UInt(32))
-        # icache.build(we=Bits(1)(0),
-        #              re=Bits(1)(1),
-        #              addr=word_addr,
-        #              wdata=Bits(32)(0))
-        # decoder.async_called(pc_addr=pc_addr)
 
         return pc_reg, pc_addr
 
