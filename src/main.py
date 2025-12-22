@@ -3,7 +3,7 @@ from assassyn.backend import *
 from assassyn import utils, backend
 from assassyn.utils import run_simulator, run_verilator
 from decoder import *
-from excutor import executor_logic
+from executor import executor_logic
 
 class WriteBack(Module):
     def __init__(self):
