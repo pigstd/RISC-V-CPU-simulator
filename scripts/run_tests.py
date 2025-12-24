@@ -219,6 +219,7 @@ def main():
     parser.add_argument("--sim-threshold", type=int, default=None, help="max simulation steps (overrides config)")
     parser.add_argument("--idle-threshold", type=int, default=None, help="idle cycles before stop (overrides config)")
     parser.add_argument("-v", "--verbose", action="store_true", help="verbose output on failure")
+    parser.add_argument("--no-report", action="store_true", help="do not generate test report")
     args = parser.parse_args()
     
     available_tests = discover_tests()
@@ -243,10 +244,22 @@ def main():
         print("No tests found in test_suite/")
         return
     
+    # Prepare report output
+    report_lines = []
+    from datetime import datetime
+    report_lines.append(f"RISC-V CPU Simulator Test Report")
+    report_lines.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    report_lines.append(f"")
+    
     # Run tests
     print(f"Running {len(targets)} test(s)...\n")
-    print(f"{'Test Name':<25} {'Status':<8} {'Cycles':>10} {'Instr':>10} {'Fetch':>10} Message")
-    print("-" * 90)
+    header = f"{'Test Name':<25} {'Status':<8} {'Cycles':>10} {'Instr':>10} {'Fetch':>10} Message"
+    separator = "-" * 90
+    print(header)
+    print(separator)
+    report_lines.append(header)
+    report_lines.append(separator)
+    
     passed = 0
     failed = 0
     
@@ -261,15 +274,27 @@ def main():
         cycles = stats.get("cycles", 0)
         instrs = stats.get("instructions", 0)
         fetches = stats.get("fetches", 0)
-        print(f"{name:<25} {status:<8} {cycles:>10} {instrs:>10} {fetches:>10} {msg}")
+        line = f"{name:<25} {status:<8} {cycles:>10} {instrs:>10} {fetches:>10} {msg}"
+        print(line)
+        report_lines.append(line)
         if ok:
             passed += 1
         else:
             failed += 1
     
     # Summary
-    print(f"\n{'='*40}")
-    print(f"Summary: {passed}/{len(targets)} passed, {failed} failed")
+    summary_sep = f"\n{'='*40}"
+    summary_line = f"Summary: {passed}/{len(targets)} passed, {failed} failed"
+    print(summary_sep)
+    print(summary_line)
+    report_lines.append(summary_sep)
+    report_lines.append(summary_line)
+    
+    # Write report to file
+    if not args.no_report:
+        report_file = TEST_DIR / "test_report"
+        report_file.write_text("\n".join(report_lines) + "\n")
+        print(f"\nReport saved to: {report_file}")
     
     if failed > 0:
         sys.exit(1)
