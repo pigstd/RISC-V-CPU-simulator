@@ -1,0 +1,28 @@
+RISC-V CPU Simulator Test Report
+Generated: 2025-12-24 21:07:49
+
+Test Name                 Status       Cycles      Instr      Fetch Message
+------------------------------------------------------------------------------------------
+1to100                    PASS           2685       2577       2578 a0=1 (correct)
+array_sum                 PASS            293        280        281 a0=210 (correct)
+binary_search             PASS            360        340        341 a0=6 (correct)
+bitcount                  PASS            269        254        255 a0=5 (correct)
+count_even                PASS            502        475        476 a0=5 (correct)
+factorial                 PASS            829        765        766 a0=120 (correct)
+fib                       PASS            386        368        369 a0=55 (correct)
+loop_sum                  PASS            301        284        285 a0=55 (correct)
+matrix_mul                PASS           3071       2922       2923 a0=4 (correct)
+max                       PASS            283        266        267 a0=9 (correct)
+min                       PASS            359        338        339 a0=1 (correct)
+overflow                  PASS           2577       2444       2445 a0=8 (correct)
+power2                    PASS            255        238        239 a0=8 (correct)
+prime                     PASS           1172       1070       1071 a0=1 (correct)
+reverse                   PASS            294        285        286 a0=5 (correct)
+simple_add                PASS             28         23         24 a0=15 (correct)
+sort                      PASS           1539       1491       1492 a0=15 (correct)
+vector_add                PASS           1333       1294       1295 a0=10 (correct)
+vector_add_100            PASS          14049      13740      13741 a0=100 (correct)
+vector_mul_100            PASS          43090      40977      40978 a0=100 (correct)
+
+========================================
+Summary: 20/20 passed, 0 failed
