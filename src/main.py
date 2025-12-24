@@ -75,11 +75,10 @@ class Executor(Module):
         )
 
     @module.combinational
-    def build(self, regs: RegArray, pc_reg: RegArray, memoryaccess: MemoryAccess, dcache: SRAM):
+    def build(self, memoryaccess: MemoryAccess, dcache: SRAM):
         decoder_result, pc_addr = self.pop_all_ports(True)
         rd_data, ex_branch_taken, ex_pc_next = executor_logic(
             signals = decoder_result,
-            regs = regs,
             pc_addr= pc_addr,
             dcache = dcache)
         memoryaccess.async_called(decoder_result=decoder_result, wdata=rd_data)
@@ -95,7 +94,8 @@ class Decoder(Module):
     def build(self,
               icache: SRAM,
               executor: Executor,
-              reg_to_write: RegArray):
+              reg_to_write: RegArray,
+              regs: RegArray):
         pc_addr = self.pop_all_ports(True)
         instr = icache.dout[0]
         opcode = instr[0:6]
@@ -104,7 +104,7 @@ class Decoder(Module):
         log("decoder fetch pc={} instr=0x{:08x} opcode={:07b} funct3={:03b} funct7={:07b}",
             pc_addr, instr, opcode, funct3, funct7)
 
-        decoder_result = decoder_logic(inst=instr, reg_to_write=reg_to_write)
+        decoder_result = decoder_logic(inst=instr, reg_to_write=reg_to_write, regs=regs)
         with Condition(decoder_result.is_valid):
             executor.async_called(decoder_result=decoder_result, pc_addr=pc_addr)
         with Condition(~decoder_result.is_valid):
@@ -225,10 +225,10 @@ def build_CPU(depth_log=18):
         fetcherimpl = FetcherImpl()
         writeback.build(regs=regs, fetcher=fetcher, reg_to_write=reg_to_write)
         memoryaccess.build(dcache=dcache, regs=regs, writeback=writeback)
-        is_branch, decoder_pc_reg, is_valid = decoder.build(icache=icache, executor=executor, reg_to_write=reg_to_write)
+        is_branch, decoder_pc_reg, is_valid = decoder.build(icache=icache, executor=executor, reg_to_write=reg_to_write, regs = regs)
         pc_reg, pc_addr = fetcher.build(icache=icache, decoder=decoder, pc_reg=pc_reg)
         driver.build(fecher=fetcher)
-        ex_branch_taken, ex_pc_next = executor.build(regs=regs, pc_reg=pc_reg, memoryaccess=memoryaccess, dcache=dcache)
+        ex_branch_taken, ex_pc_next = executor.build(memoryaccess=memoryaccess, dcache=dcache)
         fetcherimpl.build(is_branch=is_branch,
                           is_valid=is_valid,
                           pc_reg=pc_reg,

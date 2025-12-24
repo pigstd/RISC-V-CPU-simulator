@@ -3,7 +3,7 @@ from instruction import *
 
 
 @rewrite_assign
-def decoder_logic(inst, reg_to_write : RegArray):
+def decoder_logic(inst, reg_to_write : RegArray, regs: RegArray):
     is_eq = {}
     [is_R, R_rs1, R_rs2, R_rd, R_alu] = decoder_R_type(inst=inst, is_eq=is_eq)
     [is_I, I_rs1, I_imm, I_rd, I_alu] = decoder_I_type(inst=inst, is_eq=is_eq)
@@ -95,6 +95,9 @@ def decoder_logic(inst, reg_to_write : RegArray):
     
     rs1_valid = rs1_used.select(reg_to_write[rs1] == UInt(32)(0), Bits(1)(1))
     rs2_valid = rs2_used.select(reg_to_write[rs2] == UInt(32)(0), Bits(1)(1))
+
+    rs1_value = rs1_used.select(regs[rs1], UInt(32)(0))
+    rs2_value = rs2_used.select(regs[rs2], UInt(32)(0))
     
     is_valid = rs1_valid & rs2_valid
 
@@ -111,8 +114,10 @@ def decoder_logic(inst, reg_to_write : RegArray):
     return deocder_signals.bundle(
         rs1=rs1,
         rs1_used=rs1_used,
+        rs1_value=rs1_value,
         rs2=rs2,
         rs2_used=rs2_used,
+        rs2_value=rs2_value,
         rd=rd,
         rd_used=rd_used,
         imm=imm,

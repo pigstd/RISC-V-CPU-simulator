@@ -3,11 +3,11 @@ from instruction import *
 
 
 @rewrite_assign
-def executor_logic(signals, regs: RegArray, pc_addr: Value, dcache: SRAM):
+def executor_logic(signals, pc_addr: Value, dcache: SRAM):
 
     # 取寄存器值
-    rs1_val = signals.rs1_used.select(regs[signals.rs1], UInt(32)(0))
-    rs2_val = signals.rs2_used.select(regs[signals.rs2], UInt(32)(0))
+    rs1_val = signals.rs1_value
+    rs2_val = signals.rs2_value
     imm_val = signals.imm.bitcast(UInt(32))
 
     log("executor input: pc={} rs1_used={} rs2_used={} rd_used={} alu_type={:014b} imm={} branch_type={} jal={} jalr={} ecall={} ebreak={}",

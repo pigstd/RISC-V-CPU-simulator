@@ -225,8 +225,10 @@ class RV32I_ALU:
 deocder_signals = Record(
     rs1 = Bits(5),
     rs1_used = Bits(1),
+    rs1_value = UInt(32),
     rs2 = Bits(5),
     rs2_used = Bits(1),
+    rs2_value = UInt(32),
     rd = Bits(5),
     rd_used = Bits(1),
     imm = Bits(32),
