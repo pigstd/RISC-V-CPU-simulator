@@ -3,11 +3,23 @@ from instruction import *
 
 
 @rewrite_assign
-def executor_logic(signals, pc_addr: Value, dcache: SRAM):
+def executor_logic(signals, pc_addr: Value, dcache: SRAM,
+                   EX_rd : Value,
+                   EX_result : Value,
+                   MEM_rd : Value,
+                   MEM_result : Value,):
 
-    # 取寄存器值
-    rs1_val = signals.rs1_value
-    rs2_val = signals.rs2_value
+    log("bypass: EX_rd={} EX_result={} MEM_rd={} MEM_result={}", EX_rd, EX_result, MEM_rd, MEM_result)
+
+    log("rs1: {}, rs2: {}", signals.rs1, signals.rs2)
+
+    rs1_val = (signals.rs1 == EX_rd).select(EX_result,
+               (signals.rs1 == MEM_rd).select(MEM_result,
+               signals.rs1_value))
+    rs2_val = (signals.rs2 == EX_rd).select(EX_result,
+               (signals.rs2 == MEM_rd).select(MEM_result,
+               signals.rs2_value))
+
     imm_val = signals.imm.bitcast(UInt(32))
 
     log("executor input: pc={} rs1_used={} rs2_used={} rd_used={} alu_type={:014b} imm={} branch_type={} jal={} jalr={} ecall={} ebreak={}",
@@ -64,6 +76,10 @@ def executor_logic(signals, pc_addr: Value, dcache: SRAM):
     mem_we = signals.mem_write & ~misaligned
     # 字节地址转字地址（右移2位）
     word_addr = (eff_addr >> UInt(32)(2)).bitcast(UInt(32))
+    addr_oob = (word_addr >= UInt(32)(dcache.depth)) & ( mem_re | mem_we )
+    with Condition(addr_oob):
+        log("dcache addr out of range: eff_addr={} word_addr={} depth={}", eff_addr, word_addr, UInt(32)(dcache.depth))
+        finish()
     # 触发 dcache 访问（异步 dout）
     dcache.build(
         we=mem_we.bitcast(Bits(1)),
@@ -121,4 +137,4 @@ def executor_logic(signals, pc_addr: Value, dcache: SRAM):
     rd_data = sys_trap.select(UInt(32)(0), rd_data)
 
     log("executor: rs1={} rs2={} op2={} alu_res={} pc_next={}", rs1_val, rs2_val, op2, alu_res, pc_next)
-    return rd_data.bitcast(Bits(32)), signals.is_branch, pc_next
+    return rd_data.bitcast(Bits(32)), signals.is_branch, pc_next, mem_re, mem_we
