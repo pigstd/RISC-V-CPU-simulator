@@ -1,0 +1,11 @@
+{
+  "name": "overflow",
+  "memory": {
+    "text_base": 0,
+    "data_base": 8192
+  },
+  "simulator": {
+    "sim_threshold": 10000,
+    "idle_threshold": 5000
+  }
+}

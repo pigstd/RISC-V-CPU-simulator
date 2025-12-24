@@ -1,6 +1,10 @@
 from assassyn.frontend import *
 from instruction import *
 
+# 全局配置 - 数据段基地址（默认 0x2000）
+# 可通过 executor.DATA_BASE_OFFSET = xxx 在外部设置
+DATA_BASE_OFFSET = 0x2000
+
 
 @rewrite_assign
 def executor_logic(signals, regs: RegArray, pc_addr: Value, dcache: SRAM):
@@ -62,8 +66,11 @@ def executor_logic(signals, regs: RegArray, pc_addr: Value, dcache: SRAM):
     misaligned = (eff_addr & UInt(32)(0b11)) != UInt(32)(0)
     mem_re = signals.mem_read & ~misaligned
     mem_we = signals.mem_write & ~misaligned
+    # 数据段基地址偏移：使用全局配置 DATA_BASE_OFFSET
+    # 需要将访问地址减去基地址，得到 dcache 中的实际索引
+    dcache_addr = eff_addr - UInt(32)(DATA_BASE_OFFSET)
     # 字节地址转字地址（右移2位）
-    word_addr = (eff_addr >> UInt(32)(2)).bitcast(UInt(32))
+    word_addr = (dcache_addr >> UInt(32)(2)).bitcast(UInt(32))
     # 触发 dcache 访问（异步 dout）
     dcache.build(
         we=mem_we.bitcast(Bits(1)),

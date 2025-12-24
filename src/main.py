@@ -252,12 +252,19 @@ def build_CPU(depth_log=18):
 
 def main():
     import argparse
+    import executor
 
     # --sim-threshold 100 --idle-threshold 100 设置模拟器参数
     parser = argparse.ArgumentParser(description="Run CPU simulator")
     parser.add_argument("--sim-threshold", type=int, default=100, help="max simulation steps")
     parser.add_argument("--idle-threshold", type=int, default=100, help="idle cycles before stop")
+    parser.add_argument("--data-base", type=lambda x: int(x, 0), default=0x2000, 
+                        help="data segment base address (default: 0x2000)")
     args = parser.parse_args()
+
+    # 设置数据段基地址
+    executor.DATA_BASE_OFFSET = args.data_base
+    print(f"Config: data_base=0x{args.data_base:x}, sim_threshold={args.sim_threshold}, idle_threshold={args.idle_threshold}")
 
     sys = build_CPU(depth_log = 18)
     cfg = backend.config(
