@@ -66,6 +66,21 @@ class MemoryAccess(Module):
         )
         rd_for_wb = signals.rd_used.select(signals.rd, Bits(5)(0))
         writeback.async_called(rd=rd_for_wb, data=wb_data)
+        return rd_for_wb, wb_data
+
+class Mem_downstream(Downstream):
+    def __init__(self):
+        super().__init__()
+    @downstream.combinational
+    def build(self,
+              MEM_rd : RegArray,
+              MEM_result : RegArray,
+              MEM_rd_in : Value,
+              MEM_result_in : Value):
+        MEM_rd_in = MEM_rd_in.optional(Bits(5)(0))
+        MEM_result_in = MEM_result_in.optional(Bits(32)(0))
+        MEM_rd[0] <= MEM_rd_in
+        MEM_result[0] <= MEM_result_in.bitcast(UInt(32))
 
 class Executor(Module):
     def __init__(self):
@@ -75,15 +90,40 @@ class Executor(Module):
         )
 
     @module.combinational
-    def build(self, regs: RegArray, pc_reg: RegArray, memoryaccess: MemoryAccess, dcache: SRAM):
+    def build(self, memoryaccess: MemoryAccess, dcache: SRAM,
+              EX_rd : RegArray,
+              EX_result : RegArray,
+              MEM_rd : RegArray,
+              MEM_result : RegArray):
         decoder_result, pc_addr = self.pop_all_ports(True)
-        rd_data, ex_branch_taken, ex_pc_next = executor_logic(
+        rd_data, ex_branch_taken, ex_pc_next, mem_re, mem_we = executor_logic(
             signals = decoder_result,
-            regs = regs,
             pc_addr= pc_addr,
-            dcache = dcache)
+            dcache = dcache,
+            EX_rd = EX_rd[0],
+            EX_result = EX_result[0],
+            MEM_rd = MEM_rd[0],
+            MEM_result = MEM_result[0]
+        )
         memoryaccess.async_called(decoder_result=decoder_result, wdata=rd_data)
-        return ex_branch_taken, ex_pc_next
+        return ex_branch_taken, ex_pc_next, decoder_result.rd, rd_data, mem_re, mem_we
+
+# 把 ex 的结果传进寄存器，如果没有调用 EX 那就是 rd = 0
+class EX_downstream(Downstream):
+    def __init__(self):
+        super().__init__()
+    @downstream.combinational
+    def build(self,
+              EX_rd : RegArray,
+              EX_result : RegArray,
+              EX_rd_in : Value,
+              EX_result_in : Value,
+              mem_re : Value,
+              mem_we : Value):
+        EX_rd_in = EX_rd_in.optional(Bits(5)(0))
+        EX_result_in = EX_result_in.optional(Bits(32)(0))
+        EX_rd[0] <= (mem_we | mem_re).select(Bits(5)(0), EX_rd_in)
+        EX_result[0] <= (mem_we | mem_re).select(UInt(32)(0), EX_result_in.bitcast(UInt(32)))
 
 
 class Decoder(Module):
@@ -95,7 +135,12 @@ class Decoder(Module):
     def build(self,
               icache: SRAM,
               executor: Executor,
-              reg_to_write: RegArray):
+              reg_to_write: RegArray,
+              regs: RegArray,
+              ID_rd : RegArray,
+              ID_is_load : RegArray,
+              MEM_rd : RegArray,
+              MEM_result : RegArray):
         pc_addr = self.pop_all_ports(True)
         instr = icache.dout[0]
         opcode = instr[0:6]
@@ -104,14 +149,39 @@ class Decoder(Module):
         log("decoder fetch pc={} instr=0x{:08x} opcode={:07b} funct3={:03b} funct7={:07b}",
             pc_addr, instr, opcode, funct3, funct7)
 
-        decoder_result = decoder_logic(inst=instr, reg_to_write=reg_to_write)
+        decoder_result = decoder_logic(
+            inst=instr, reg_to_write=reg_to_write, regs=regs,
+            ID_rd=ID_rd[0], ID_is_load=ID_is_load[0],
+            MEM_rd=MEM_rd[0], MEM_result=MEM_result[0]
+        )
         with Condition(decoder_result.is_valid):
             executor.async_called(decoder_result=decoder_result, pc_addr=pc_addr)
         with Condition(~decoder_result.is_valid):
             log("decoder invalid instruction at pc={}: instr=0x{:08x}", pc_addr, instr)
+        ID_rd_in = decoder_result.is_valid.select(
+            decoder_result.rd,
+            Bits(5)(0)
+        )
+        ID_is_load_in = decoder_result.is_valid.select(
+            decoder_result.mem_read,
+            Bits(1)(0)
+        )
         # is_branch, pc_addr, is_valid
-        # is_valid 应该在 decoder 的时候放进去，但是现在还没有写
-        return decoder_result.is_branch, pc_addr, decoder_result.is_valid
+        return decoder_result.is_branch, pc_addr, decoder_result.is_valid, ID_rd_in, ID_is_load_in
+
+class ID_downstream(Downstream):
+    def __init__(self):
+        super().__init__()
+    @downstream.combinational
+    def build(self,
+              ID_rd : RegArray,
+              ID_is_load : RegArray,
+              ID_rd_in : Value,
+              ID_is_load_in : Value):
+        ID_rd_in = ID_rd_in.optional(Bits(5)(0))
+        ID_is_load_in = ID_is_load_in.optional(Bits(1)(0))
+        ID_rd[0] <= ID_rd_in
+        ID_is_load[0] <= ID_is_load_in
 
 class Fetcher(Module):
     def __init__(self):
@@ -126,15 +196,6 @@ class Fetcher(Module):
         pc_addr = pc_reg[0]
 
         # log("fetch stage pc addr: {}", pc_addr)
-
-        # 由于是 naive CPU，所以要取的肯定就是 pc_addr 对应的指令
-        # PC 是字节地址，SRAM 按字（word）索引，需要右移2位
-        # word_addr = (pc_addr >> UInt(32)(2)).bitcast(UInt(32))
-        # icache.build(we=Bits(1)(0),
-        #              re=Bits(1)(1),
-        #              addr=word_addr,
-        #              wdata=Bits(32)(0))
-        # decoder.async_called(pc_addr=pc_addr)
 
         return pc_reg, pc_addr
 
@@ -233,12 +294,47 @@ def build_CPU(depth_log=18):
         fetcher = Fetcher()
         driver = Driver()
         fetcherimpl = FetcherImpl()
+        ex_downstream = EX_downstream()
+        mem_downstream = Mem_downstream()
+        id_downstream = ID_downstream()
+
+        # ID 阶段得到的 rd，以及是否是 load 指令
+        ID_rd = RegArray(Bits(5), 1, initializer=[0])
+        ID_is_load = RegArray(Bits(1), 1, initializer=[0])
+
+        # EX 算出来的 rd 和 result 的寄存器
+        EX_rd = RegArray(Bits(5), 1, initializer=[0])
+        EX_result = RegArray(UInt(32), 1, initializer=[0])
+
+        # MEM 阶段的 rd 和 result 的寄存器
+        MEM_rd = RegArray(Bits(5), 1, initializer=[0])
+        MEM_result = RegArray(UInt(32), 1, initializer=[0])
+
         writeback.build(regs=regs, fetcher=fetcher, reg_to_write=reg_to_write)
-        memoryaccess.build(dcache=dcache, regs=regs, writeback=writeback)
-        is_branch, decoder_pc_reg, is_valid = decoder.build(icache=icache, executor=executor, reg_to_write=reg_to_write)
+
+        MEM_rd_in, MEM_result_in = memoryaccess.build(dcache=dcache, regs=regs, writeback=writeback)
+        mem_downstream.build(MEM_rd=MEM_rd, MEM_result=MEM_result, MEM_rd_in=MEM_rd_in, MEM_result_in=MEM_result_in)
+
+        is_branch, decoder_pc_reg, is_valid, ID_rd_in, ID_is_load_in = decoder.build(
+            icache=icache, executor=executor, reg_to_write=reg_to_write, regs = regs,
+            ID_rd=ID_rd, ID_is_load=ID_is_load,
+            MEM_rd=MEM_rd, MEM_result=MEM_result
+        )
+        id_downstream.build(ID_rd=ID_rd, ID_is_load=ID_is_load, ID_rd_in=ID_rd_in, ID_is_load_in=ID_is_load_in)
+
         pc_reg, pc_addr = fetcher.build(icache=icache, decoder=decoder, pc_reg=pc_reg)
+
         driver.build(fecher=fetcher)
-        ex_branch_taken, ex_pc_next = executor.build(regs=regs, pc_reg=pc_reg, memoryaccess=memoryaccess, dcache=dcache)
+
+        ex_branch_taken, ex_pc_next, EX_rd_in, EX_result_in, mem_re, mem_we = executor.build(
+            memoryaccess=memoryaccess, dcache=dcache,
+            EX_rd=EX_rd, EX_result=EX_result,
+            MEM_rd=MEM_rd, MEM_result=MEM_result
+        )
+        ex_downstream.build(
+            EX_rd=EX_rd, EX_result=EX_result, EX_rd_in=EX_rd_in, EX_result_in=EX_result_in,
+            mem_re=mem_re, mem_we=mem_we)
+
         fetcherimpl.build(is_branch=is_branch,
                           is_valid=is_valid,
                           pc_reg=pc_reg,
@@ -247,7 +343,8 @@ def build_CPU(depth_log=18):
                           ex_is_branch=ex_branch_taken,
                           ex_pc_bypass=ex_pc_next,
                           icache=icache,
-                          decoder=decoder)
+                          decoder=decoder
+        )
     return sys
 
 def main():

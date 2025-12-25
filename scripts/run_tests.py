@@ -35,8 +35,8 @@ SIM_ENTRY = SRC_DIR / "main.py"
 LOG_PATTERN = re.compile(r"writeback stage: rd = ([0-9a-fA-Fx]+) data = ([0-9a-fA-Fx]+)")
 # Pattern to extract cycle number
 CYCLE_PATTERN = re.compile(r"Cycle @(\d+(?:\.\d+)?)")
-# Pattern to count decoded instructions
-DECODE_PATTERN = re.compile(r"decoder fetch pc=")
+# Pattern to count executed instructions (executor stage)
+EXEC_PATTERN = re.compile(r"executor input: pc=")
 
 
 def extract_stats(log_text: str) -> dict:
@@ -52,8 +52,8 @@ def extract_stats(log_text: str) -> dict:
     if cycles:
         stats["cycles"] = int(float(cycles[-1]))
     
-    # Count decoded instructions
-    stats["instructions"] = len(DECODE_PATTERN.findall(log_text))
+    # Count executed instructions (executor stage, no duplicates due to stalls)
+    stats["instructions"] = len(EXEC_PATTERN.findall(log_text))
     
     # Count fetches
     stats["fetches"] = log_text.count("fetch stage pc addr:")

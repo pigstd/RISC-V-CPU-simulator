@@ -3,7 +3,9 @@ from instruction import *
 
 
 @rewrite_assign
-def decoder_logic(inst, reg_to_write : RegArray):
+def decoder_logic(inst, reg_to_write : RegArray, regs: RegArray,
+                  ID_rd : Value, ID_is_load : Value,
+                  MEM_rd : Value, MEM_result : Value):
     is_eq = {}
     [is_R, R_rs1, R_rs2, R_rd, R_alu] = decoder_R_type(inst=inst, is_eq=is_eq)
     [is_I, I_rs1, I_imm, I_rd, I_alu] = decoder_I_type(inst=inst, is_eq=is_eq)
@@ -93,17 +95,27 @@ def decoder_logic(inst, reg_to_write : RegArray):
                is_I.select(I_alu,
                is_I_star.select(I_star_alu, Bits(RV32I_ALU.CNT)(1 << RV32I_ALU.ALU_NONE))))
     
-    rs1_valid = rs1_used.select(reg_to_write[rs1] == UInt(32)(0), Bits(1)(1))
-    rs2_valid = rs2_used.select(reg_to_write[rs2] == UInt(32)(0), Bits(1)(1))
+    rs1_valid = rs1_used.select(~((rs1 == ID_rd) & ID_is_load), Bits(1)(1))
+    rs2_valid = rs2_used.select(~((rs2 == ID_rd) & ID_is_load), Bits(1)(1))
+
+    rs1_value = rs1_used.select(regs[rs1], UInt(32)(0))
+    rs2_value = rs2_used.select(regs[rs2], UInt(32)(0))
+
+
+    log ("decoder: Checking for forwarding from MEM stage")
+    log ("decoder: rs1_used = {}, rs1 = {} MEM_rd = {} , MEM_result = {}"
+         , rs1_used, rs1, MEM_rd, MEM_result)
+    
+    rs1_value = (rs1_used & (rs1 == MEM_rd)).select(MEM_result, rs1_value)
+    rs2_value = (rs2_used & (rs2 == MEM_rd)).select(MEM_result, rs2_value)
+
+    log("rs1_value after forwarding: {:08x}", rs1_value)
     
     is_valid = rs1_valid & rs2_valid
 
     with Condition(is_valid & rd_used & (rd != Bits(5)(0))):
         reg_to_write[rd] <= reg_to_write[rd] + UInt(32)(1)
 
-    log("decoder type flags: R={} I={} I*={} S={} B={} U={} J={} ecall={} ebreak={}",
-        is_R, is_I, is_I_star, is_S, is_B, is_U, is_J, ecall, ebreak)
-    log("decoder: imm(raw)={} imm(signed)={}", imm, imm.bitcast(Int(32)))
     log("decoder: rs1_used = {} , rs1 = {}", rs1_used, rs1)
     log("decoder: rs2_used = {} , rs2 = {}", rs2_used, rs2)
     log("decoder: rd_used = {} , rd = {}", rd_used, rd)
@@ -114,8 +126,10 @@ def decoder_logic(inst, reg_to_write : RegArray):
     return deocder_signals.bundle(
         rs1=rs1,
         rs1_used=rs1_used,
+        rs1_value=rs1_value,
         rs2=rs2,
         rs2_used=rs2_used,
+        rs2_value=rs2_value,
         rd=rd,
         rd_used=rd_used,
         imm=imm,
