@@ -56,7 +56,10 @@ def executor_logic(signals, pc_addr: Value, dcache: SRAM,
     log("executor operands: rs1_val={} rs2_val={} op2={} shamt={}", rs1_val, rs2_val, op2, shamt)
 
     # one-hot 选择 ALU 结果
-    alu_res_basic = signals.alu_type.select1hot(*alu_candidates)
+    # alu_res_basic = signals.alu_type.select1hot(*alu_candidates)
+    alu_res_basic = UInt(32)(0)
+    for i in range(RV32I_ALU.CNT):
+        alu_res_basic = (signals.alu_type == Bits(RV32I_ALU.CNT)(1 << i)).select(alu_candidates[i], alu_res_basic)
     
     # LUI: rd = imm (imm 已经是左移12位后的值)
     # AUIPC: rd = PC + imm
@@ -91,7 +94,7 @@ def executor_logic(signals, pc_addr: Value, dcache: SRAM,
     dcache.build(
         we=mem_we.bitcast(Bits(1)),
         re=mem_re.bitcast(Bits(1)),
-        addr=word_addr,
+        addr=word_addr.bitcast(Bits(dcache.addr_width)),
         wdata=rs2_val.bitcast(Bits(32)),
     )
     with Condition(signals.mem_read | signals.mem_write):

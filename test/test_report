@@ -1,28 +1,28 @@
 RISC-V CPU Simulator Test Report
-Generated: 2025-12-24 23:35:22
+Generated: 2025-12-25 17:20:28
 
-Test Name                 Status       Cycles      Instr      Fetch Message
-------------------------------------------------------------------------------------------
-1to100                    PASS           1345       1034       1238 a0=1 (correct)
-array_sum                 PASS            156        117        144 a0=210 (correct)
-binary_search             PASS            199        147        180 a0=6 (correct)
-bitcount                  PASS            146         97        132 a0=5 (correct)
-count_even                PASS            260        186        234 a0=5 (correct)
-factorial                 PASS            474        322        411 a0=120 (correct)
-fib                       PASS            220        154        203 a0=55 (correct)
-loop_sum                  PASS            156        118        140 a0=55 (correct)
-matrix_mul                PASS           1574       1132       1426 a0=4 (correct)
-max                       PASS            156        112        140 a0=9 (correct)
-min                       PASS            198        142        178 a0=1 (correct)
-overflow                  PASS           1287        909       1155 a0=8 (correct)
-power2                    PASS            140         98        124 a0=8 (correct)
-prime                     PASS            719        472        618 a0=1 (correct)
-reverse                   PASS            144        110        136 a0=5 (correct)
-simple_add                PASS             19         13         15 a0=15 (correct)
-sort                      PASS            745        551        698 a0=15 (correct)
-vector_add                PASS            672        510        634 a0=10 (correct)
-vector_add_100            PASS           6236       4724       5928 a0=100 (correct)
-vector_mul_100            PASS          21657      15076      19545 a0=100 (correct)
+Test Name                 Status       Cycles      Instr      Fetch    V-Sim(ns)    V-Real(s)    V-Ratio Message
+----------------------------------------------------------------------------------------------------------------------------------
+1to100                    PASS           1345       1034       1238   1346000.00         0.66 2026083.29 sim a0=1, verilator a0=1 (expected 1) | veri cycles=1345
+array_sum                 PASS            156        117        144    157000.00         0.08 1941023.27 sim a0=210, verilator a0=210 (expected 210) | veri cycles=156
+binary_search             PASS            199        147        180    200000.00         0.12 1646387.56 sim a0=6, verilator a0=6 (expected 6) | veri cycles=199
+bitcount                  PASS            146         97        132    147000.00         0.09 1549643.08 sim a0=5, verilator a0=5 (expected 5) | veri cycles=146
+count_even                PASS            260        186        234    261000.00         0.15 1798199.60 sim a0=5, verilator a0=5 (expected 5) | veri cycles=260
+factorial                 PASS            474        322        411    475000.00         0.22 2131067.38 sim a0=120, verilator a0=120 (expected 120) | veri cycles=474
+fib                       PASS            220        154        203    221000.00         0.12 1815026.29 sim a0=55, verilator a0=55 (expected 55) | veri cycles=220
+loop_sum                  PASS            156        118        140    157000.00         0.12 1345157.54 sim a0=55, verilator a0=55 (expected 55) | veri cycles=156
+matrix_mul                PASS           1574       1132       1426   1575000.00         0.91 1727429.45 sim a0=4, verilator a0=4 (expected 4) | veri cycles=1574
+max                       PASS            156        112        140    157000.00         0.09 1758787.13 sim a0=9, verilator a0=9 (expected 9) | veri cycles=156
+min                       PASS            198        142        178    199000.00         0.10 1899222.49 sim a0=1, verilator a0=1 (expected 1) | veri cycles=198
+overflow                  PASS           1287        909       1155   1288000.00         0.65 1981820.95 sim a0=8, verilator a0=8 (expected 8) | veri cycles=1287
+power2                    PASS            140         98        124    141000.00         0.07 1884425.74 sim a0=8, verilator a0=8 (expected 8) | veri cycles=140
+prime                     PASS            719        472        618    720000.00         0.38 1917386.38 sim a0=1, verilator a0=1 (expected 1) | veri cycles=719
+reverse                   PASS            144        110        136    145000.00         0.11 1369166.30 sim a0=5, verilator a0=5 (expected 5) | veri cycles=144
+simple_add                PASS             19         13         15     20000.00         0.01 1419512.38 sim a0=15, verilator a0=15 (expected 15) | veri cycles=19
+sort                      PASS            745        551        698    746000.00         0.50 1487653.70 sim a0=15, verilator a0=15 (expected 15) | veri cycles=745
+vector_add                PASS            672        510        634    673000.00         0.38 1790319.68 sim a0=10, verilator a0=10 (expected 10) | veri cycles=672
+vector_add_100            PASS           6236       4724       5928   6237000.00         3.25 1917265.21 sim a0=100, verilator a0=100 (expected 100) | veri cycles=6236
+vector_mul_100            PASS          21657      15076      19545  21658000.00        10.96 1975377.95 sim a0=100, verilator a0=100 (expected 100) | veri cycles=21657
 
 ========================================
 Summary: 20/20 passed, 0 failed
