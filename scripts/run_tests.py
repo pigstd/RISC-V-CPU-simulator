@@ -37,6 +37,10 @@ LOG_PATTERN = re.compile(r"writeback stage: rd = ([0-9a-fA-Fx]+) data = ([0-9a-f
 CYCLE_PATTERN = re.compile(r"Cycle @(\d+(?:\.\d+)?)")
 # Pattern to count executed instructions (executor stage)
 EXEC_PATTERN = re.compile(r"executor input: pc=")
+# Pattern to extract verilator timing summary
+VERILATOR_TIMING_PATTERN = re.compile(
+    r"\*\*\s+tb\.test_tb\s+PASS\s+([0-9.]+)\s+([0-9.]+)\s+([0-9.]+)"
+)
 
 
 def extract_stats(log_text: str) -> dict:
@@ -59,6 +63,30 @@ def extract_stats(log_text: str) -> dict:
     stats["fetches"] = log_text.count("fetch stage pc addr:")
     
     return stats
+
+
+def extract_a0(log_text: str):
+    """Return last a0 writeback value from log (int) or None."""
+    a0_values = []
+    for rd_str, data_str in LOG_PATTERN.findall(log_text):
+        try:
+            rd_val = int(rd_str, 0)
+            if rd_val == 10:  # a0 = x10
+                a0_values.append(int(data_str, 0))
+        except ValueError:
+            continue
+    return a0_values[-1] if a0_values else None
+
+
+def parse_verilator_timing(log_text: str) -> dict:
+    """Parse SIM TIME/REAL TIME/RATIO from verilator log (ns/s)."""
+    res = {"sim_time_ns": None, "real_time_s": None, "ratio": None}
+    m = VERILATOR_TIMING_PATTERN.search(log_text)
+    if m:
+        res["sim_time_ns"] = float(m.group(1))
+        res["real_time_s"] = float(m.group(2))
+        res["ratio"] = float(m.group(3))
+    return res
 
 
 def discover_tests():
@@ -120,7 +148,15 @@ def read_expected(ans_file: Path) -> int:
 def run_test(name: str, sim_threshold: int = None, idle_threshold: int = None, verbose: bool = False):
     """Run a single test case. Returns (success, message, stats)."""
     files = get_test_files(name)
-    stats = {"cycles": 0, "instructions": 0, "fetches": 0}
+    stats = {
+        "cycles": 0,
+        "instructions": 0,
+        "fetches": 0,
+        "verilator_sim_time_ns": None,
+        "verilator_real_time_s": None,
+        "verilator_ratio": None,
+    }
+    veri_stats = {"cycles": 0, "instructions": 0, "fetches": 0}
     
     # Check required files
     if not files["exe"].exists():
@@ -187,27 +223,42 @@ def run_test(name: str, sim_threshold: int = None, idle_threshold: int = None, v
     # Extract statistics from log
     stats = extract_stats(log_text)
     
-    # Extract last a0 writeback
-    a0_values = []
-    for rd_str, data_str in LOG_PATTERN.findall(log_text):
-        try:
-            rd_val = int(rd_str, 0)
-            if rd_val == 10:  # a0 = x10
-                a0_values.append(int(data_str, 0))
-        except ValueError:
-            continue
-    
-    if not a0_values:
+    sim_a0 = extract_a0(log_text)
+    if sim_a0 is None:
         if verbose:
             print(f"  log tail:\n{log_text[-1000:]}")
         return False, "no a0 writeback found", stats
     
-    last_a0 = a0_values[-1]
+    # Read verilator log
+    veri_log_file = WORKSPACE_DIR / "verilator_log"
+    if veri_log_file.exists():
+        veri_log_text = veri_log_file.read_text()
+        veri_stats = extract_stats(veri_log_text)
+        veri_a0 = extract_a0(veri_log_text)
+        timing = parse_verilator_timing(veri_log_text)
+        stats["verilator_sim_time_ns"] = timing["sim_time_ns"]
+        stats["verilator_real_time_s"] = timing["real_time_s"]
+        stats["verilator_ratio"] = timing["ratio"]
+    else:
+        veri_log_text = ""
+        veri_a0 = None
     
-    if last_a0 != expected:
-        return False, f"a0 mismatch: got {last_a0}, expected {expected}", stats
+    if veri_a0 is None:
+        if verbose and veri_log_text:
+            print(f"  verilator log tail:\n{veri_log_text[-1000:]}")
+        return False, "verilator: no a0 writeback found", stats
     
-    return True, f"a0={last_a0} (correct)", stats
+    # Check results
+    if sim_a0 != expected:
+        return False, f"sim a0 mismatch: got {sim_a0}, expected {expected}", stats
+    if veri_a0 != expected:
+        return False, f"verilator a0 mismatch: got {veri_a0}, expected {expected}", stats
+    
+    msg = f"sim a0={sim_a0}, verilator a0={veri_a0} (expected {expected})"
+    # If verilator stats available, append brief info for debugging
+    if veri_stats.get("cycles", 0):
+        msg += f" | veri cycles={veri_stats['cycles']}"
+    return True, msg, stats
 
 
 def main():
@@ -253,8 +304,8 @@ def main():
     
     # Run tests
     print(f"Running {len(targets)} test(s)...\n")
-    header = f"{'Test Name':<25} {'Status':<8} {'Cycles':>10} {'Instr':>10} {'Fetch':>10} Message"
-    separator = "-" * 90
+    header = f"{'Test Name':<25} {'Status':<8} {'Cycles':>10} {'Instr':>10} {'Fetch':>10} {'V-Sim(ns)':>12} {'V-Real(s)':>12} {'V-Ratio':>10} Message"
+    separator = "-" * 130
     print(header)
     print(separator)
     report_lines.append(header)
@@ -274,7 +325,10 @@ def main():
         cycles = stats.get("cycles", 0)
         instrs = stats.get("instructions", 0)
         fetches = stats.get("fetches", 0)
-        line = f"{name:<25} {status:<8} {cycles:>10} {instrs:>10} {fetches:>10} {msg}"
+        v_sim = stats.get("verilator_sim_time_ns") or 0
+        v_real = stats.get("verilator_real_time_s") or 0
+        v_ratio = stats.get("verilator_ratio") or 0
+        line = f"{name:<25} {status:<8} {cycles:>10} {instrs:>10} {fetches:>10} {v_sim:>12.2f} {v_real:>12.2f} {v_ratio:>10.2f} {msg}"
         print(line)
         report_lines.append(line)
         if ok:

@@ -239,7 +239,7 @@ class FetcherImpl(Downstream):
         word_addr = (fetch_pc_addr >> UInt(32)(2)).bitcast(UInt(32))
         icache.build(we=Bits(1)(0),
                      re=need_fetch,
-                     addr=word_addr,
+                     addr=word_addr.bitcast(Int(icache.addr_width)),
                      wdata=Bits(32)(0))
         
         with Condition(need_fetch):
@@ -376,6 +376,10 @@ def main():
     print("simulate output is written in /workspace/log")
     with open(f"{workspace}/log", "w") as f:
         print(output, file = f)
+    ver_output = run_verilator(vcd)
+    print("verilator output is written in /workspace/verilator_log")
+    with open(f"{workspace}/verilator_log", "w") as f:
+        print(ver_output, file = f)
 
 if __name__ == "__main__":
     main()
