@@ -10,19 +10,31 @@ import functools
 # 脚本位于 scripts/，我们需要向上找到根目录，再找到 src 和 unit_tests
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
-SRC_DIR = os.path.join(PROJECT_ROOT, 'src')
 TEST_DIR = os.path.join(PROJECT_ROOT, 'unit_tests')
 
-# 将 src 和 unit_tests 加入 python 路径，以便 import
-sys.path.insert(0, SRC_DIR)
+# 根据环境变量选择使用 Tomasulo 还是原始 src 实现
+CPU_IMPL = os.environ.get("CPU_IMPL", "tomasulo").lower()
+if CPU_IMPL not in ("tomasulo", "baseline"):
+    CPU_IMPL = "tomasulo"
+
+if CPU_IMPL == "tomasulo":
+    SRC_DIR = os.path.join(PROJECT_ROOT, "Tomasulo")
+    MAIN_IMPORT = "Tomasulo.src.main"
+else:
+    SRC_DIR = os.path.join(PROJECT_ROOT, "src")
+    MAIN_IMPORT = "main"
+
+# 将项目根目录与 unit_tests 加入 python 路径，以便 import 包
+sys.path.insert(0, PROJECT_ROOT)
 sys.path.insert(0, TEST_DIR)
 
 # ================= 导入模块 =================
 # 将 unit_tests 目录加入路径并导入测试用例与仿真工具
 try:
-    sys.path.insert(0, TEST_DIR)
     import test_cases
-    from main import build_CPU, workspace as WORKSPACE_PATH
+    main_mod = importlib.import_module(MAIN_IMPORT)
+    build_CPU = main_mod.build_CPU
+    WORKSPACE_PATH = getattr(main_mod, "workspace", os.path.join(SRC_DIR, "src", "workspace"))
     from assassyn import backend
     from assassyn.utils import run_simulator
 except ImportError as e:
@@ -50,24 +62,23 @@ def write_workload(instructions):
 def parse_log_and_get_regs(log_output):
     """
     解析仿真日志，模拟寄存器的最终状态。
-    关注日志行： 'writeback stage: rd = 1 data = 5'
+    Tomasulo 日志中使用 commit 行： 'commit: can_commit=1 ... rd=1 value=0x00000005'
     """
     # 模拟一个寄存器堆
     regs = {i: 0 for i in range(32)}
     
-    # 正则表达式匹配日志
-    # 假设日志格式为: writeback stage: rd = 1 data = 5
-    # 如果 assassyn 输出的是 Bit(5)(1) 这种格式，需要调整正则
-    wb_pattern = re.compile(r"writeback stage: rd = (\d+) data = (\d+)")
+    # 兼容旧的 writeback 行和 Tomasulo 的 commit 行
+    wb_pattern = re.compile(r"writeback stage: rd = ([0-9a-fA-Fx]+) data = ([0-9a-fA-Fx]+)")
+    commit_pattern = re.compile(r"commit:.*rd=([0-9a-fA-Fx]+).*value=0x([0-9a-fA-Fa-f]+)")
     
     for line in log_output.splitlines():
         # 去除颜色代码（如果有）和空白
         clean_line = line.strip()
         
-        match = wb_pattern.search(clean_line)
+        match = wb_pattern.search(clean_line) or commit_pattern.search(clean_line)
         if match:
-            rd = int(match.group(1))
-            data = int(match.group(2))
+            rd = int(match.group(1), 0)
+            data = int(match.group(2), 0)
             
             # x0 永远是 0，不写入
             if rd != 0:

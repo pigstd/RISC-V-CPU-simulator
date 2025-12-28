@@ -1,0 +1,51 @@
+from assassyn.frontend import *
+from .ROB import *
+
+# 简单的提交器：每个周期尝试提交 head 处的一条指令
+
+
+class Commiter(Module):
+    def __init__(self):
+        super().__init__(ports={})
+
+    @module.combinational
+    def build(self, rob: ROB, regs: RegArray, reg_pending: RegArray):
+        head = rob.head[0]
+        can_commit = rob.busy[head] & rob.ready[head]
+
+        mem_we = can_commit & rob.is_store[head]
+        mem_addr = mem_we.select(rob.store_addr[head], UInt(32)(0))
+        mem_data = mem_we.select(rob.store_data[head], UInt(32)(0))
+        log("commit: can_commit={} head={} is_store={} rd={} value={}", can_commit, head, rob.is_store[head], rob.dest[head], rob.value[head])
+
+        # 仅当 reg_pending 仍指向 head 时清零映射
+        head_tag = (head + UInt(ROB_IDX_WIDTH)(1)).bitcast(Bits(REG_PENDING_WIDTH))
+        clear_pending = (reg_pending[rob.dest[head]] == head_tag)
+
+        with Condition(can_commit):
+            with Condition(rob.is_syscall[head]):
+                log("commit: hit syscall/ebreak at pc=0x{:08x}", rob.pc[head])
+                finish()
+            # 普通写回（非 store），rd != 0
+            with Condition(~rob.is_store[head] & (rob.dest[head] != Bits(5)(0))):
+                regs[rob.dest[head]] <= rob.value[head]
+                with Condition(clear_pending):
+                    reg_pending[rob.dest[head]] <= Bits(REG_PENDING_WIDTH)(0)
+                log("commit: writeback rd={} value={}", rob.dest[head], rob.value[head])
+            # 清空 entry 状态
+            rob.busy[head] <= Bits(1)(0)
+            rob.ready[head] <= Bits(1)(0)
+            rob.is_branch[head] <= Bits(1)(0)
+            rob.is_syscall[head] <= Bits(1)(0)
+            rob.is_store[head] <= Bits(1)(0)
+            rob.dest[head] <= Bits(5)(0)
+            rob.value[head] <= UInt(32)(0)
+            rob.pc[head] <= UInt(32)(0)
+            rob.store_addr[head] <= UInt(32)(0)
+            rob.store_data[head] <= UInt(32)(0)
+
+            # head++（环形）
+            next_head = ((head + UInt(ROB_IDX_WIDTH)(1)) & UInt(ROB_IDX_WIDTH)((1 << ROB_IDX_WIDTH) - 1)).bitcast(UInt(ROB_IDX_WIDTH))
+            rob.head[0] <= next_head
+        return mem_we, mem_addr, mem_data
+        

@@ -176,3 +176,8 @@ class ASM:
     @classmethod
     def nop(cls):
         return cls.addi(0, 0, 0)
+
+    @classmethod
+    def ebreak(cls):
+        # I-type, opcode=1110011, funct3=000, imm=1, rs1=0, rd=0
+        return cls._encode_i(0b1110011, 0b000, 0, 0, 1)

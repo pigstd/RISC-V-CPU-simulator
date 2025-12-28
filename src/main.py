@@ -79,8 +79,9 @@ class Mem_downstream(Downstream):
               MEM_result_in : Value):
         MEM_rd_in = MEM_rd_in.optional(Bits(5)(0))
         MEM_result_in = MEM_result_in.optional(Bits(32)(0))
+        mem_result_clean = (MEM_rd_in == Bits(5)(0)).select(UInt(32)(0), MEM_result_in.bitcast(UInt(32)))
         MEM_rd[0] <= MEM_rd_in
-        MEM_result[0] <= MEM_result_in.bitcast(UInt(32))
+        MEM_result[0] <= mem_result_clean
 
 class Executor(Module):
     def __init__(self):
@@ -122,8 +123,9 @@ class EX_downstream(Downstream):
               mem_we : Value):
         EX_rd_in = EX_rd_in.optional(Bits(5)(0))
         EX_result_in = EX_result_in.optional(Bits(32)(0))
+        ex_result_clean = (EX_rd_in == Bits(5)(0)).select(UInt(32)(0), EX_result_in.bitcast(UInt(32)))
         EX_rd[0] <= (mem_we | mem_re).select(Bits(5)(0), EX_rd_in)
-        EX_result[0] <= (mem_we | mem_re).select(UInt(32)(0), EX_result_in.bitcast(UInt(32)))
+        EX_result[0] <= (mem_we | mem_re).select(UInt(32)(0), ex_result_clean)
 
 
 class Decoder(Module):
