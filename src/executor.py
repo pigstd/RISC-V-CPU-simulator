@@ -17,11 +17,17 @@ def executor_logic(signals, pc_addr: Value, dcache: SRAM,
 
     log("rs1: {}, rs2: {}", signals.rs1, signals.rs2)
 
-    rs1_val = (signals.rs1 == EX_rd).select(EX_result,
-               (signals.rs1 == MEM_rd).select(MEM_result,
+    # 避免对 x0 的错误旁路：仅在 rd != 0 时才进行前递
+    ex_rs1_fwd = (signals.rs1 == EX_rd) & (EX_rd != Bits(5)(0))
+    mem_rs1_fwd = (signals.rs1 == MEM_rd) & (MEM_rd != Bits(5)(0))
+    ex_rs2_fwd = (signals.rs2 == EX_rd) & (EX_rd != Bits(5)(0))
+    mem_rs2_fwd = (signals.rs2 == MEM_rd) & (MEM_rd != Bits(5)(0))
+
+    rs1_val = ex_rs1_fwd.select(EX_result,
+               mem_rs1_fwd.select(MEM_result,
                signals.rs1_value))
-    rs2_val = (signals.rs2 == EX_rd).select(EX_result,
-               (signals.rs2 == MEM_rd).select(MEM_result,
+    rs2_val = ex_rs2_fwd.select(EX_result,
+               mem_rs2_fwd.select(MEM_result,
                signals.rs2_value))
 
     imm_val = signals.imm.bitcast(UInt(32))
@@ -51,6 +57,7 @@ def executor_logic(signals, pc_addr: Value, dcache: SRAM,
     alu_candidates[RV32I_ALU.ALU_CMP_LTU] = (rs1_val < op2).zext(UInt(32))
     alu_candidates[RV32I_ALU.ALU_CMP_GE]  = (rs1_s >= op2_s).zext(UInt(32))
     alu_candidates[RV32I_ALU.ALU_CMP_GEU] = (rs1_val >= op2).zext(UInt(32))
+    alu_candidates[RV32I_ALU.ALU_CMP_NE]  = (rs1_val != op2).zext(UInt(32))
     # 其余保持 0（ALU_NONE 等）
 
     log("executor operands: rs1_val={} rs2_val={} op2={} shamt={}", rs1_val, rs2_val, op2, shamt)
@@ -104,26 +111,11 @@ def executor_logic(signals, pc_addr: Value, dcache: SRAM,
     link_addr = pc_addr + UInt(32)(4)
     is_jal_like = signals.is_jal | signals.is_jalr
 
-    # 计算分支条件
-    rs1_s = rs1_val.bitcast(Int(32))
-    rs2_s = rs2_val.bitcast(Int(32))
-    cond_eq = rs1_val == rs2_val
-    cond_lt = rs1_s < rs2_s
-    cond_ltu = rs1_val < rs2_val
-    cond_ne = cond_eq == Bits(1)(0)
-    cond_ge = cond_lt == Bits(1)(0)
-    cond_geu = cond_ltu == Bits(1)(0)
+    # 通过 ALU 比较结果判断分支是否满足：ALU 比较结果为 1/0
+    branch_cmp = (alu_res_basic != UInt(32)(0))
+    branch_cond = (signals.is_branch & ~is_jal_like) & branch_cmp
 
-    funct3 = signals.branch_type
-    beq = funct3 == Bits(3)(0b000)
-    bne = funct3 == Bits(3)(0b001)
-    blt = funct3 == Bits(3)(0b100)
-    bge = funct3 == Bits(3)(0b101)
-    bltu = funct3 == Bits(3)(0b110)
-    bgeu = funct3 == Bits(3)(0b111)
-    branch_cond = (beq & cond_eq) | (bne & cond_ne) | (blt & cond_lt) | (bge & cond_ge) | (bltu & cond_ltu) | (bgeu & cond_geu)
-
-    branch_taken = is_jal_like | ((signals.is_branch & ~is_jal_like) & branch_cond)
+    branch_taken = is_jal_like | branch_cond
 
     # 计算目标地址
     jalr_target_bits = (rs1_val + imm_val) & UInt(32)(0xFFFFFFFE)
