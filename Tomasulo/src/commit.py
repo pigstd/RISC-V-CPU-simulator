@@ -23,6 +23,8 @@ class Commiter(Module):
         clear_pending = (reg_pending[rob.dest[head]] == head_tag)
 
         with Condition(can_commit):
+            # 统一的提交日志，便于统计提交数量（含 store 和 syscall）
+            log("commit: retire rob={} pc=0x{:08x} rd={} is_store={} value=0x{:08x}", head, rob.pc[head], rob.dest[head], rob.is_store[head], rob.value[head])
             with Condition(rob.is_syscall[head]):
                 log("commit: hit syscall/ebreak at pc=0x{:08x}", rob.pc[head])
                 finish()

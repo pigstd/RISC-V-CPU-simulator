@@ -37,7 +37,11 @@ LOG_FILE = WORKSPACE_DIR / "log"
 # Patterns for extracting basic stats from simulator log
 CYCLE_PATTERN = re.compile(r"Cycle @(\d+(?:\.\d+)?)")
 FETCH_PATTERN = re.compile(r"fetcherimpl: fetch_pc=", re.IGNORECASE)
-COMMIT_PATTERN = re.compile(r"commit: writeback rd=(\d+)\s+value=([0-9a-fA-Fx]+)")
+# 统一统计提交：匹配 commit: retire rob=... rd=... is_store=... value=...
+COMMIT_PATTERN = re.compile(
+    r"commit: retire rob=\d+\s+pc=0x[0-9a-fA-F]+\s+rd=(\d+)\s+is_store=\d+\s+value=0x([0-9a-fA-F]+)",
+    re.IGNORECASE,
+)
 
 
 def discover_tests():
@@ -122,7 +126,7 @@ def extract_a0(log_text: str):
         try:
             rd = int(rd_str, 0)
             if rd == 10:
-                a0_vals.append(int(val_str, 0))
+                a0_vals.append(int(val_str, 16))
         except ValueError:
             continue
     return a0_vals[-1] if a0_vals else None

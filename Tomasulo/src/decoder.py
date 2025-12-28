@@ -102,10 +102,19 @@ def decoder_logic(inst, reg_pending : RegArray, regs: RegArray
                is_B.select(B_alu,
                is_U.select(Bits(RV32I_ALU.CNT)(1 << RV32I_ALU.ALU_ADD),
                            Bits(RV32I_ALU.CNT)(1 << RV32I_ALU.ALU_NONE))))))
-    rs1_rob_tag = (reg_pending[rs1] - UInt(REG_PENDING_WIDTH)(1)).bitcast(UInt(ROB_IDX_WIDTH))
-    rs2_rob_tag = (reg_pending[rs2] - UInt(REG_PENDING_WIDTH)(1)).bitcast(UInt(ROB_IDX_WIDTH))
-    rs1_rob_tag_used = (reg_pending[rs1] != UInt(REG_PENDING_WIDTH)(0))
-    rs2_rob_tag_used = (reg_pending[rs2] != UInt(REG_PENDING_WIDTH)(0))
+    # reg_pending 存储 rob_idx+1，0 表示无依赖；避免 0-1 下溢为 0xff 造成数组越界
+    rs1_pending = reg_pending[rs1]
+    rs2_pending = reg_pending[rs2]
+    rs1_rob_tag_used = (rs1_pending != UInt(REG_PENDING_WIDTH)(0))
+    rs2_rob_tag_used = (rs2_pending != UInt(REG_PENDING_WIDTH)(0))
+    rs1_rob_tag = rs1_rob_tag_used.select(
+        (rs1_pending - UInt(REG_PENDING_WIDTH)(1)).bitcast(UInt(ROB_IDX_WIDTH)),
+        UInt(ROB_IDX_WIDTH)(0)
+    )
+    rs2_rob_tag = rs2_rob_tag_used.select(
+        (rs2_pending - UInt(REG_PENDING_WIDTH)(1)).bitcast(UInt(ROB_IDX_WIDTH)),
+        UInt(ROB_IDX_WIDTH)(0)
+    )
     
     rs1_valid = (rs1_used | (rs1 != Bits(5)(0))).select(
         rs1_rob_tag_used.select(

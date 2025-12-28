@@ -1,23 +1,23 @@
 Test Name            Status   Cycles  Commits  Fetches Message
 --------------------------------------------------------------
-1to100               FAIL      10000        4    10000 no a0 writeback found
-array_sum            PASS        336       85      335 a0=210 (expected 210)
-binary_search        PASS        423      106      422 a0=6 (expected 6)
-bitcount             PASS        258       66      257 a0=5 (expected 5)
-count_even           PASS        569      133      568 a0=5 (expected 5)
-factorial            FAIL      10000       14    10000 a0 mismatch: got 1, expected 120
-fib                  PASS        439       97      438 a0=55 (expected 55)
-loop_sum             FAIL      10000        4    10000 no a0 writeback found
-matrix_mul           FAIL      10000       50    10000 a0 mismatch: got 1, expected 4
-max                  PASS        329       81      328 a0=9 (expected 9)
-min                  PASS        419      103      418 a0=1 (expected 1)
-overflow             FAIL      10000        4    10000 no a0 writeback found
-power2               PASS        272       63      271 a0=8 (expected 8)
-prime                PASS       1293      305     1292 a0=1 (expected 1)
-reverse              FAIL      10000       18    10000 no a0 writeback found
-simple_add           PASS         33        9       32 a0=15 (expected 15)
-sort                 FAIL      10000       15    10000 no a0 writeback found
-vector_add           PASS       1505      399     1504 a0=10 (expected 10)
-vector_add_100       PASS      13460     4013    13459 a0=100 (expected 100)
-vector_mul_100       FAIL     100000       24   100000 a0 mismatch: got 16, expected 100
-Summary: 12/20 passed, 8 failed
+1to100               PASS       2483     1034     2482 a0=1 (expected 1)
+array_sum            PASS        297      117      296 a0=210 (expected 210)
+binary_search        PASS        365      147      364 a0=6 (expected 6)
+bitcount             PASS        218       97      217 a0=5 (expected 5)
+count_even           PASS        476      186      475 a0=5 (expected 5)
+factorial            PASS        785      322      784 a0=120 (expected 120)
+fib                  PASS        401      154      400 a0=55 (expected 55)
+loop_sum             PASS        281      118      280 a0=55 (expected 55)
+matrix_mul           PASS       2701     1132     2700 a0=4 (expected 4)
+max                  PASS        287      112      286 a0=9 (expected 9)
+min                  PASS        365      142      364 a0=1 (expected 1)
+overflow             PASS       2171      909     2170 a0=8 (expected 8)
+power2               PASS        238       98      237 a0=8 (expected 8)
+prime                PASS       1194      472     1193 a0=1 (expected 1)
+reverse              PASS        273      110      272 a0=5 (expected 5)
+simple_add           PASS         33       13       32 a0=15 (expected 15)
+sort                 PASS       1375      551     1374 a0=15 (expected 15)
+vector_add           PASS       1291      510     1290 a0=10 (expected 10)
+vector_add_100       PASS      10760     4724    10759 a0=100 (expected 100)
+vector_mul_100       PASS      36289    15076    36288 a0=100 (expected 100)
+Summary: 20/20 passed, 0 failed

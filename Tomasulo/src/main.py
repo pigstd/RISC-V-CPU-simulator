@@ -86,23 +86,28 @@ class IsserImpl(Downstream):
         re = re.optional(default=Bits(1)(0))
         pc_addr = pc_addr.optional(default=UInt(32)(0))
         instr = instr.optional(default=Bits(32)(0))
+        # 默认保持不阻塞，只有在 re 有效且分析出冲突时才更新
+        stall = Bits(1)(0)
+        stall_pc = UInt(32)(0)
+        stop_signal = Bits(1)(0)
         cbd_payload = cbd_signal.value().optional(default=CBD_signal.bundle(
             ROB_idx=UInt(4)(0),
             rd_data=UInt(32)(0),
             valid=Bits(1)(0),
         ).value())
         cbd = CBD_signal.view(cbd_payload)
-        with Condition(re):
-            decoder_result = decoder_logic(
-                instr,
-                reg_pending = reg_pending,
-                regs=regs,
-                rob = rob,
-                cbd = cbd,
-            )
-            is_mem = decoder_result.mem_read | decoder_result.mem_write
-            stall = rob.is_full() | is_mem.select(lsq.busy[0], rs.busy[0])
-
+        
+        decoder_result = decoder_logic(
+            instr,
+            reg_pending = reg_pending,
+            regs=regs,
+            rob = rob,
+            cbd = cbd,
+        )
+        is_mem = decoder_result.mem_read | decoder_result.mem_write
+        stall = (rob.is_full() | is_mem.select(lsq.busy[0], rs.busy[0])) & re
+        stop_signal = (~stall & decoder_result.is_branch) & re
+        with Condition(re == Bits(1)(1)):
             log("issuer: pc=0x{:08x} instr=0x{:08x} is_mem={} stall={}", pc_addr, instr, is_mem, stall)
 
             with Condition(~stall):
@@ -122,8 +127,15 @@ class IsserImpl(Downstream):
                 # decoder 已经旁路 CDB/ROB/寄存器，这里只做 tag/valid 封装
                 qj_raw = decoder_result.rs1_used.select(reg_pending[decoder_result.rs1], Bits(REG_PENDING_WIDTH)(0))
                 qk_raw = decoder_result.rs2_used.select(reg_pending[decoder_result.rs2], Bits(REG_PENDING_WIDTH)(0))
-                qj = (qj_raw - Bits(REG_PENDING_WIDTH)(1)).bitcast(Bits(REG_PENDING_WIDTH))
-                qk = (qk_raw - Bits(REG_PENDING_WIDTH)(1)).bitcast(Bits(REG_PENDING_WIDTH))
+                # 只有 reg_pending 非 0 时才减 1，避免 0-1 下溢变成 0xff 传给 LSQ/RS
+                qj = (qj_raw != Bits(REG_PENDING_WIDTH)(0)).select(
+                    (qj_raw - Bits(REG_PENDING_WIDTH)(1)).bitcast(Bits(REG_PENDING_WIDTH)),
+                    Bits(REG_PENDING_WIDTH)(0)
+                )
+                qk = (qk_raw != Bits(REG_PENDING_WIDTH)(0)).select(
+                    (qk_raw - Bits(REG_PENDING_WIDTH)(1)).bitcast(Bits(REG_PENDING_WIDTH)),
+                    Bits(REG_PENDING_WIDTH)(0)
+                )
                 rs1_val = decoder_result.rs1_value
                 rs2_val = decoder_result.rs2_value
                 qj_valid = decoder_result.rs1_valid
@@ -186,8 +198,8 @@ class IsserImpl(Downstream):
             # 输出给 fetcherimpl 的握手/停顿信号
             stall_pc = pc_addr
             # 分支指令发射后暂停取指，等待 ALU 计算出跳转目标再由 start_signal 重新启动
-            stop_signal = ~stall & decoder_result.is_branch
-        return re.select(stall, Bits(1)(0)), re.select(stall_pc, UInt(32)(0)), re.select(stop_signal, Bits(1)(0))
+        # re 为 0 时直接保持默认值 0；只有 re 为 1 时上面的 Condition 会覆盖
+        return stall, stall_pc, stop_signal
 
 class Fetcher(Module):
     def __init__(self):
@@ -324,9 +336,9 @@ def build_CPU(depth_log=18, data_base=0x2000):
             rob=rob,
             metadata=metadata,
         )
-        pc_addr, instr, re = issuer.build(icache=icache)
+        issue_pc_addr, instr, re = issuer.build(icache=icache)
         stall, stall_pc, stop_signal = issueimpl.build(
-            pc_addr=pc_addr,
+            pc_addr=issue_pc_addr,
             instr=instr,
             re=re,
             rob=rob,
