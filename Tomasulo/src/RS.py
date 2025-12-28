@@ -1,7 +1,6 @@
 from assassyn.frontend import *
 # 直接复用 ALU 模块里定义的 ALU_signal 记录类型
 from .alu import ALU, ALU_signal
-from .arbitrator import CBD_signal as CDBSignal
 try:
     from .instruction import RV32I_ALU
 except ImportError:
@@ -10,8 +9,9 @@ except ImportError:
 # Tomasulo Reservation Station (简化版) 的基础数据结构
 # 每个 RS entry 持有操作数就绪标志、操作数值或标签、目标 rd、ROB 索引等。
 
-RS_SIZE = 2
-RS_IDX_WIDTH = (RS_SIZE - 1).bit_length()
+RS_ENTRY_NUM = 4  # RS 条目数量
+RS_NUM_WIDTH = 4  # RS 索引位宽
+RS_MAX = (2 ** RS_NUM_WIDTH) - 1
 
 class RSEntry:
     def __init__(self):

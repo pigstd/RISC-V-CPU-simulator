@@ -78,7 +78,7 @@ class IsserImpl(Downstream):
               instr: Value,
               re: Value,
               rob: ROB,
-              rs: RSEntry,
+              rs: list[RSEntry],
               lsq: LSQEntry,
               reg_pending: RegArray,
               regs: RegArray,
@@ -105,7 +105,10 @@ class IsserImpl(Downstream):
             cbd = cbd,
         )
         is_mem = decoder_result.mem_read | decoder_result.mem_write
-        stall = (rob.is_full() | is_mem.select(lsq.busy[0], rs.busy[0])) & re
+        rs_busy = rs[0].busy[0]
+        for i in range(1, RS_ENTRY_NUM):
+            rs_busy = rs_busy & rs[i].busy[0]
+        stall = (rob.is_full() | is_mem.select(lsq.busy[0], rs_busy)) & re
         stop_signal = (~stall & decoder_result.is_branch) & re
         with Condition(re == Bits(1)(1)):
             log("issuer: pc=0x{:08x} instr=0x{:08x} is_mem={} stall={}", pc_addr, instr, is_mem, stall)
@@ -162,38 +165,47 @@ class IsserImpl(Downstream):
                     lsq.rs2_id[0] <= decoder_result.rs2
                     lsq.imm[0] <= decoder_result.imm.bitcast(UInt(32))
                 with Condition(~is_mem):
+                    RS_select = Bits(RS_NUM_WIDTH)(RS_MAX) # 不存在的初始值
+                    for i in range(RS_ENTRY_NUM):
+                        RS_select = (rs[i].busy[0]).select(RS_select, Bits(RS_NUM_WIDTH)(i))
+                    with Condition(RS_select == Bits(RS_NUM_WIDTH)(RS_MAX)):
+                        log("issuer error: no free RS found")
+                        finish()
                     # RS 入口
+                    log("select RS idx = {}", RS_select)
                     log("issuer -> RS: rob_idx={} rd={} rs1_dep={} rs2_dep={}", rob_idx, decoder_result.rd, qj, qk)
-                    rs.busy[0] <= Bits(1)(1)
-                    rs.op[0] <= decoder_result.alu_type
-                    # op1/op2 特殊处理：LUI 用 0+imm，AUIPC 用 pc+imm，其余保持 rs1/rs2 或 imm
-                    op1_val = rs1_val
-                    op2_val = decoder_result.rs2_used.select(
-                        rs2_val,
-                        decoder_result.imm.bitcast(UInt(32))
-                    )
-                    op1_val = decoder_result.is_lui.select(UInt(32)(0),
-                                decoder_result.is_auipc.select(pc_addr, op1_val))
-                    rs.vj[0] <= op1_val
-                    op2_val = decoder_result.rs2_used.select(
-                        rs2_val,
-                        decoder_result.imm.bitcast(UInt(32))
-                    )
-                    rs.vk[0] <= op2_val
-                    rs.qj[0] <= qj
-                    rs.qk[0] <= qk
-                    rs.qj_valid[0] <= qj_valid
-                    rs.qk_valid[0] <= qk_valid
-                    rs.rd[0] <= decoder_result.rd
-                    rs.rob_idx[0] <= rob_idx.zext(Bits(4))
-                    rs.imm[0] <= decoder_result.imm.bitcast(UInt(32))
-                    rs.is_branch[0] <= decoder_result.is_branch
-                    rs.is_jal[0] <= decoder_result.is_jal
-                    rs.is_jalr[0] <= decoder_result.is_jalr
-                    rs.is_lui[0] <= decoder_result.is_lui
-                    rs.is_auipc[0] <= decoder_result.is_auipc
-                    rs.pc_addr[0] <= pc_addr
-                    rs.is_syscall[0] <= decoder_result.is_ecall | decoder_result.is_ebreak
+                    for i in range(RS_ENTRY_NUM):
+                        with Condition(RS_select == Bits(RS_NUM_WIDTH)(i)):
+                            rs[i].busy[0] <= Bits(1)(1)
+                            rs[i].op[0] <= decoder_result.alu_type
+                            # op1/op2 特殊处理：LUI 用 0+imm，AUIPC 用 pc+imm，其余保持 rs1/rs2 或 imm
+                            op1_val = rs1_val
+                            op2_val = decoder_result.rs2_used.select(
+                                rs2_val,
+                                decoder_result.imm.bitcast(UInt(32))
+                            )
+                            op1_val = decoder_result.is_lui.select(UInt(32)(0),
+                                        decoder_result.is_auipc.select(pc_addr, op1_val))
+                            rs[i].vj[0] <= op1_val
+                            op2_val = decoder_result.rs2_used.select(
+                                rs2_val,
+                                decoder_result.imm.bitcast(UInt(32))
+                            )
+                            rs[i].vk[0] <= op2_val
+                            rs[i].qj[0] <= qj
+                            rs[i].qk[0] <= qk
+                            rs[i].qj_valid[0] <= qj_valid
+                            rs[i].qk_valid[0] <= qk_valid
+                            rs[i].rd[0] <= decoder_result.rd
+                            rs[i].rob_idx[0] <= rob_idx.zext(Bits(4))
+                            rs[i].imm[0] <= decoder_result.imm.bitcast(UInt(32))
+                            rs[i].is_branch[0] <= decoder_result.is_branch
+                            rs[i].is_jal[0] <= decoder_result.is_jal
+                            rs[i].is_jalr[0] <= decoder_result.is_jalr
+                            rs[i].is_lui[0] <= decoder_result.is_lui
+                            rs[i].is_auipc[0] <= decoder_result.is_auipc
+                            rs[i].pc_addr[0] <= pc_addr
+                            rs[i].is_syscall[0] <= decoder_result.is_ecall | decoder_result.is_ebreak
 
             # 输出给 fetcherimpl 的握手/停顿信号
             stall_pc = pc_addr
@@ -301,9 +313,9 @@ def build_CPU(depth_log=18, data_base=0x2000):
         issuer = Issuer()
         issueimpl = IsserImpl()
         driver = Driver()
-        rs = RSEntry()
-        rs_downstream = RS_downstream()
-        alu = ALU()
+        rs = [RSEntry() for _ in range(RS_ENTRY_NUM)]
+        rs_downstream = [RS_downstream() for _ in range(RS_ENTRY_NUM)]
+        alu = [ALU() for _ in range(RS_ENTRY_NUM)]
         rob = ROB()
         lsq = LSQEntry()
         lsq_downstream = LSQ_downstream()
@@ -323,7 +335,9 @@ def build_CPU(depth_log=18, data_base=0x2000):
         )
 
         lsu_cbd_signal = lsu.build(dcache=dcache)
-        alu_cbd_signal = alu.build()
+        alu_cbd_signal_list = []
+        for i in range(RS_ENTRY_NUM):
+            alu_cbd_signal_list.append(alu[i].build())
         
         metadata = driver.build(
             fecher=fetcher,
@@ -332,7 +346,7 @@ def build_CPU(depth_log=18, data_base=0x2000):
         
         cbd_signal, start_signal, target_pc = cdb_arbitrator.build(
             LSU_CBD_req=lsu_cbd_signal,
-            ALU_CBD_req=alu_cbd_signal,
+            ALU_CBD_req=alu_cbd_signal_list,
             rob=rob,
             metadata=metadata,
         )
@@ -357,13 +371,14 @@ def build_CPU(depth_log=18, data_base=0x2000):
             issue_stall=stall,
             metadata=metadata,
         )
-        rs_downstream.build(
-            rs=rs,
-            alu=alu,
-            cbd_signal=cbd_signal,
-            issue_stall=stall,
-            metadata=metadata,
-        )
+        for i in range(RS_ENTRY_NUM):
+            rs_downstream[i].build(
+                rs=rs[i],
+                alu=alu[i],
+                cbd_signal=cbd_signal,
+                issue_stall=stall,
+                metadata=metadata,
+            )
         mem_access.build(
             dcache=dcache,
             data=mem_data,
