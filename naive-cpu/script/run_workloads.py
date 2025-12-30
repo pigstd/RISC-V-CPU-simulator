@@ -14,7 +14,12 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+# Prefer per-repo workloads, fall back to test suites and naive-cpu workspace
 WORKLOAD_DIR = REPO_ROOT / "test" / "my_tests" / "workloads"
+if not WORKLOAD_DIR.exists():
+    WORKLOAD_DIR = REPO_ROOT / "test" / "test_suite"
+if not WORKLOAD_DIR.exists():
+    WORKLOAD_DIR = REPO_ROOT / "naive-cpu" / "src" / "workspace"
 WORKSPACE_DIR = REPO_ROOT / "naive-cpu" / "src" / "workspace"
 SIM_ENTRY = REPO_ROOT / "naive-cpu" / "src" / "main.py"
 
@@ -38,13 +43,29 @@ LOG_PATTERN = re.compile(r"writeback stage: rd = ([0-9a-fA-Fx]+) data = ([0-9a-f
 
 def locate_workload(name: str):
     # Prefer per-test subfolder, fallback to flat layout for compatibility
-    candidates = [
-        (WORKLOAD_DIR / name / f"{name}.exe", WORKLOAD_DIR / name / f"{name}.data"),
-        (WORKLOAD_DIR / f"{name}.exe", WORKLOAD_DIR / f"{name}.data"),
-    ]
+    candidates = []
+    # test/<name>/<name>.exe + .data
+    candidates.append((WORKLOAD_DIR / name / f"{name}.exe", WORKLOAD_DIR / name / f"{name}.data"))
+    # flat: <name>.exe + <name>.data
+    candidates.append((WORKLOAD_DIR / f"{name}.exe", WORKLOAD_DIR / f"{name}.data"))
+    # common naming: workload.exe + data.mem inside naive workspace
+    candidates.append((WORKLOAD_DIR / f"{name}.exe", WORKLOAD_DIR / "data.mem"))
+    candidates.append((WORKLOAD_DIR / f"{name}.exe", WORKLOAD_DIR / f"{name}.mem"))
+    # fallback: generic workload.exe + data.mem in workspace dir
+    candidates.append((WORKLOAD_DIR / "workload.exe", WORKLOAD_DIR / "data.mem"))
+
     for exe, data in candidates:
         if exe.exists() and data.exists():
             return exe, data
+
+    # As a last resort, search recursively for matching exe and data files
+    exe_paths = list(WORKLOAD_DIR.rglob(f"{name}.exe")) if WORKLOAD_DIR.exists() else []
+    for exe in exe_paths:
+        data_candidates = [exe.with_suffix('.data'), exe.with_suffix('.mem'), exe.parent / 'data.mem']
+        for d in data_candidates:
+            if d.exists():
+                return exe, d
+
     return None, None
 
 

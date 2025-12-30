@@ -274,16 +274,16 @@ class Driver(Module):
             ports={}
         )
     @module.combinational
-    def build(self, fecher : Fetcher, committer : Commiter):
+    def build(self, fetcher : Fetcher, committer : Commiter):
         is_init = RegArray(UInt(1), 1, initializer=[1])
         tick_reg = RegArray(Bits(8), 1, initializer=[0])
         with Condition(is_init[0] == UInt(1)(1)):
             is_init[0] <= UInt(1)(0)
-            fecher.async_called()
+            fetcher.async_called()
             committer.async_called()
             log("CPU Simulation Started")
         with Condition(is_init[0] == UInt(1)(0)):
-            fecher.async_called()
+            fetcher.async_called()
         committer.async_called()
         # heartbeat 翻转，驱动 CDB 下游每周期触发
         tick_reg[0] <= tick_reg[0] + Bits(8)(1)
@@ -340,7 +340,7 @@ def build_CPU(depth_log=18, data_base=0x2000):
             alu_cbd_signal_list.append(alu[i].build())
         
         metadata = driver.build(
-            fecher=fetcher,
+            fetcher=fetcher,
             committer=committer,
         )
         
@@ -411,6 +411,7 @@ def main():
     parser.add_argument("--idle-threshold", type=int, default=100, help="idle cycles before stop")
     parser.add_argument("--data-base", type=lambda x: int(x, 0), default=0x2000, 
                         help="data segment base address (default: 0x2000)")
+    parser.add_argument("--no-verilator", action="store_true", help="skip running verilator")
     args = parser.parse_args()
 
     print(f"Config: data_base=0x{args.data_base:x}, sim_threshold={args.sim_threshold}, idle_threshold={args.idle_threshold}")
@@ -428,10 +429,14 @@ def main():
     print("simulate output is written in /workspace/log")
     with open(f"{workspace}/log", "w") as f:
         print(output, file = f)
-    # ver_output = run_verilator(vcd)
-    # print("verilator output is written in /workspace/verilator_log")
-    # with open(f"{workspace}/verilator_log", "w") as f:
-    #     print(ver_output, file = f)
+    if not args.no_verilator:
+        try:
+            ver_output = run_verilator(vcd)
+            print("verilator output is written in /workspace/verilator_log")
+            with open(f"{workspace}/verilator_log", "w") as f:
+                print(ver_output, file = f)
+        except Exception as e:
+            print("warning: running verilator failed:", e)
 
 if __name__ == "__main__":
     main()
