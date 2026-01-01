@@ -50,6 +50,9 @@ COMMIT_PATTERN = re.compile(
     r"commit: retire rob=\d+\s+pc=0x[0-9a-fA-F]+\s+rd=(\d+)\s+is_store=\d+\s+value=0x([0-9a-fA-F]+)",
     re.IGNORECASE,
 )
+# 分支预测统计
+BRANCH_PATTERN = re.compile(r"CDB branch:.*is_B=1")
+MISPRED_PATTERN = re.compile(r"CDB branch:.*mispred=1")
 
 
 def discover_tests():
@@ -127,10 +130,14 @@ def extract_stats(log_text: str) -> dict:
     cycles = [float(c) for c in CYCLE_PATTERN.findall(log_text)]
     commits = COMMIT_PATTERN.findall(log_text)
     fetches = FETCH_PATTERN.findall(log_text)
+    branches = BRANCH_PATTERN.findall(log_text)
+    mispreds = MISPRED_PATTERN.findall(log_text)
     stats = {
         "cycles": int(cycles[-1]) if cycles else 0,
         "commits": len(commits),
         "fetches": len(fetches),
+        "branches": len(branches),
+        "mispreds": len(mispreds),
     }
     return stats
 
@@ -151,7 +158,7 @@ def extract_a0(log_text: str):
 def run_test(name: str, sim_threshold: int = None, idle_threshold: int = None, verbose: bool = False, use_verilator: bool = False):
     """Run one test; returns (ok, message, stats)."""
     files = get_test_files(name)
-    stats = {"cycles": 0, "commits": 0, "fetches": 0}
+    stats = {"cycles": 0, "commits": 0, "fetches": 0, "branches": 0, "mispreds": 0}
 
     if not files["exe"].exists():
         return False, f"missing {name}.exe", stats
@@ -270,7 +277,7 @@ def main():
         return
 
     print(f"Running {len(targets)} test(s) with Tomasulo simulator...\n")
-    header = f"{'Test Name':<20} {'Status':<6} {'Cycles':>8} {'Commits':>8} {'Fetches':>8} Message"
+    header = f"{'Test Name':<20} {'Status':<6} {'Cycles':>8} {'Commits':>8} {'Branches':>8} {'Mispred':>8} {'Acc%':>6} Message"
     separator = "-" * len(header)
     print(header)
     print(separator)
@@ -286,7 +293,15 @@ def main():
             use_verilator=args.verilator,
         )
         status = "PASS" if ok else "FAIL"
-        line = f"{name:<20} {status:<6} {stats['cycles']:>8} {stats['commits']:>8} {stats['fetches']:>8} {msg}"
+        # 计算预测正确率
+        branches = stats.get('branches', 0)
+        mispreds = stats.get('mispreds', 0)
+        if branches > 0:
+            accuracy = (branches - mispreds) / branches * 100
+            acc_str = f"{accuracy:.1f}"
+        else:
+            acc_str = "N/A"
+        line = f"{name:<20} {status:<6} {stats['cycles']:>8} {stats['commits']:>8} {branches:>8} {mispreds:>8} {acc_str:>6} {msg}"
         print(line)
         report_lines.append(line)
         passed += int(ok)

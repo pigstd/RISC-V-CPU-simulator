@@ -32,6 +32,7 @@ class RSEntry:
         self.imm = RegArray(UInt(32), 1, initializer=[0])
         # 分支/JAL/JALR 控制
         self.is_branch = RegArray(Bits(1), 1, initializer=[0])
+        self.is_B = RegArray(Bits(1), 1, initializer=[0])  # 条件分支 B 类型
         self.is_jal = RegArray(Bits(1), 1, initializer=[0])
         self.is_jalr = RegArray(Bits(1), 1, initializer=[0])
         self.is_lui = RegArray(Bits(1), 1, initializer=[0])
@@ -86,7 +87,7 @@ class RS_downstream(Downstream):
                     op1_val = rs.vj[0],
                     op2_val = rs.vk[0],
                     alu_type = rs.op[0],
-                    is_B = rs.is_branch[0],
+                    is_B = rs.is_B[0],
                     is_jal = rs.is_jal[0],
                     is_jalr = rs.is_jalr[0],
                     pc_addr = rs.pc_addr[0],

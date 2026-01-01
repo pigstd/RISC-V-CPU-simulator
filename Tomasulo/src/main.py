@@ -20,6 +20,15 @@ from .arbitrator import *
 
 ROB_MASK = (1 << ROB_IDX_WIDTH) - 1
 
+# Issue 阶段产生的预测控制信号
+IssueControl_signal = Record(
+    predict_valid = Bits(1),     # B/JAL 预测跳转有效
+    predict_target_pc = UInt(32), # 预测的目标 PC
+    jalr_stall = Bits(1),        # JALR 需要 stall
+    stall = Bits(1),             # 资源冲突导致的 stall
+    stall_pc = UInt(32),         # stall 时的 PC
+)
+
 class MemeoryAccess(Downstream):
     def __init__(self):
         super().__init__()
@@ -80,16 +89,21 @@ class IsserImpl(Downstream):
               rob: ROB,
               rs: list[RSEntry],
               lsq: LSQEntry,
-              reg_pending: RegArray,
+              rat: RAT,  # 改用新的 RAT 类
               regs: RegArray,
-              cbd_signal: Value):
+              bht: BHT,  # 添加 BHT 参数
+              cbd_signal):  # RecordValue
         re = re.optional(default=Bits(1)(0))
         pc_addr = pc_addr.optional(default=UInt(32)(0))
         instr = instr.optional(default=Bits(32)(0))
-        # 默认保持不阻塞，只有在 re 有效且分析出冲突时才更新
+        
+        # 默认输出值
         stall = Bits(1)(0)
         stall_pc = UInt(32)(0)
-        stop_signal = Bits(1)(0)
+        predict_valid = Bits(1)(0)
+        predict_target_pc = UInt(32)(0)
+        jalr_stall = Bits(1)(0)
+        
         cbd_payload = cbd_signal.value().optional(default=CBD_signal.bundle(
             ROB_idx=UInt(4)(0),
             rd_data=UInt(32)(0),
@@ -99,7 +113,7 @@ class IsserImpl(Downstream):
         
         decoder_result = decoder_logic(
             instr,
-            reg_pending = reg_pending,
+            reg_pending = rat,  # RAT 支持 [] 索引
             regs=regs,
             rob = rob,
             cbd = cbd,
@@ -108,10 +122,35 @@ class IsserImpl(Downstream):
         rs_busy = rs[0].busy[0]
         for i in range(1, RS_ENTRY_NUM):
             rs_busy = rs_busy & rs[i].busy[0]
-        stall = (rob.is_full() | is_mem.select(lsq.busy[0], rs_busy)) & re
-        stop_signal = (~stall & decoder_result.is_branch) & re
+        
+        # 资源冲突 stall
+        resource_stall = (rob.is_full() | is_mem.select(lsq.busy[0], rs_busy)) & re
+        stall = resource_stall
+        
+        # 分支预测信号：B/JAL 可以预测跳转，JALR 需要 stall
+        # predict_target_pc = PC + imm (对于 B 和 JAL)
+        branch_target = pc_addr + decoder_result.imm.bitcast(UInt(32))
+        
+        # 使用 BHT 预测条件分支
+        # JAL 总是跳转，B类型使用 BHT 预测
+        bht_prediction = bht.predict(pc_addr)  # BHT 预测结果
+        is_B_branch = decoder_result.is_B & re & (~resource_stall)
+        is_jal_branch = decoder_result.is_jal & re & (~resource_stall)
+        
+        # 只有在没有资源 stall 且是 predictable branch 时才预测
+        # B 类型：BHT 预测跳转时才预测 taken
+        # JAL：总是预测跳转
+        predict_taken = is_jal_branch | (is_B_branch & bht_prediction)
+        predict_valid = predict_taken
+        predict_target_pc = branch_target
+        
+        # JALR 需要 stall（不预测）
+        is_jalr_issue = decoder_result.is_jalr & re & (~resource_stall)
+        jalr_stall = is_jalr_issue
+        
         with Condition(re == Bits(1)(1)):
-            log("issuer: pc=0x{:08x} instr=0x{:08x} is_mem={} stall={}", pc_addr, instr, is_mem, stall)
+            log("issuer: pc=0x{:08x} instr=0x{:08x} is_mem={} stall={} predict_valid={} jalr_stall={} bht_pred={}", 
+                pc_addr, instr, is_mem, stall, predict_valid, jalr_stall, bht_prediction)
 
             with Condition(~stall):
                 rob_idx = rob.tail[0]
@@ -125,12 +164,18 @@ class IsserImpl(Downstream):
                 rob.is_branch[rob_idx] <= decoder_result.is_branch
                 rob.is_syscall[rob_idx] <= decoder_result.is_ecall | decoder_result.is_ebreak
                 rob.is_store[rob_idx] <= decoder_result.mem_write
+                rob.is_jalr[rob_idx] <= decoder_result.is_jalr
+                
+                # 记录分支预测信息（使用 BHT 预测结果）
+                # JAL：总是预测跳转
+                # B 类型：使用 BHT 预测
+                # JALR：不预测（predicted_taken = 0）
+                rob.predicted_taken[rob_idx] <= predict_taken
+                rob.predicted_pc[rob_idx] <= branch_target
 
-                # 生成源操作数的依赖信息，reg_pending 用 0 表示无依赖，其余存 rob_idx+1
-                # decoder 已经旁路 CDB/ROB/寄存器，这里只做 tag/valid 封装
-                qj_raw = decoder_result.rs1_used.select(reg_pending[decoder_result.rs1], Bits(REG_PENDING_WIDTH)(0))
-                qk_raw = decoder_result.rs2_used.select(reg_pending[decoder_result.rs2], Bits(REG_PENDING_WIDTH)(0))
-                # 只有 reg_pending 非 0 时才减 1，避免 0-1 下溢变成 0xff 传给 LSQ/RS
+                # 生成源操作数的依赖信息，rat 用 0 表示无依赖，其余存 rob_idx+1
+                qj_raw = decoder_result.rs1_used.select(rat[decoder_result.rs1], Bits(REG_PENDING_WIDTH)(0))
+                qk_raw = decoder_result.rs2_used.select(rat[decoder_result.rs2], Bits(REG_PENDING_WIDTH)(0))
                 qj = (qj_raw != Bits(REG_PENDING_WIDTH)(0)).select(
                     (qj_raw - Bits(REG_PENDING_WIDTH)(1)).bitcast(Bits(REG_PENDING_WIDTH)),
                     Bits(REG_PENDING_WIDTH)(0)
@@ -145,11 +190,13 @@ class IsserImpl(Downstream):
                 qk_valid = decoder_result.rs2_valid
 
                 # 重命名表写入 rd（存 rob_idx+1，0 作为 sentinel）
-                with Condition(decoder_result.rd_used & (decoder_result.rd != Bits(5)(0))):
-                    reg_pending[decoder_result.rd] <= (rob_idx + UInt(ROB_IDX_WIDTH)(1)).bitcast(Bits(REG_PENDING_WIDTH))
+                rat.write_if(
+                    decoder_result.rd_used & (decoder_result.rd != Bits(5)(0)),
+                    decoder_result.rd,
+                    (rob_idx + UInt(ROB_IDX_WIDTH)(1)).bitcast(Bits(REG_PENDING_WIDTH))
+                )
 
                 with Condition(is_mem):
-                    # LSQ 入口
                     log("issuer -> LSQ: rob_idx={} rd={} rs1_dep={} rs2_dep={}", rob_idx, decoder_result.rd, qj, qk)
                     lsq.busy[0] <= Bits(1)(1)
                     lsq.is_load[0] <= decoder_result.mem_read
@@ -165,20 +212,18 @@ class IsserImpl(Downstream):
                     lsq.rs2_id[0] <= decoder_result.rs2
                     lsq.imm[0] <= decoder_result.imm.bitcast(UInt(32))
                 with Condition(~is_mem):
-                    RS_select = Bits(RS_NUM_WIDTH)(RS_MAX) # 不存在的初始值
+                    RS_select = Bits(RS_NUM_WIDTH)(RS_MAX)
                     for i in range(RS_ENTRY_NUM):
                         RS_select = (rs[i].busy[0]).select(RS_select, Bits(RS_NUM_WIDTH)(i))
                     with Condition(RS_select == Bits(RS_NUM_WIDTH)(RS_MAX)):
                         log("issuer error: no free RS found")
                         finish()
-                    # RS 入口
                     log("select RS idx = {}", RS_select)
                     log("issuer -> RS: rob_idx={} rd={} rs1_dep={} rs2_dep={}", rob_idx, decoder_result.rd, qj, qk)
                     for i in range(RS_ENTRY_NUM):
                         with Condition(RS_select == Bits(RS_NUM_WIDTH)(i)):
                             rs[i].busy[0] <= Bits(1)(1)
                             rs[i].op[0] <= decoder_result.alu_type
-                            # op1/op2 特殊处理：LUI 用 0+imm，AUIPC 用 pc+imm，其余保持 rs1/rs2 或 imm
                             op1_val = rs1_val
                             op2_val = decoder_result.rs2_used.select(
                                 rs2_val,
@@ -200,6 +245,7 @@ class IsserImpl(Downstream):
                             rs[i].rob_idx[0] <= rob_idx.zext(Bits(4))
                             rs[i].imm[0] <= decoder_result.imm.bitcast(UInt(32))
                             rs[i].is_branch[0] <= decoder_result.is_branch
+                            rs[i].is_B[0] <= decoder_result.is_B  # 条件分支 B 类型
                             rs[i].is_jal[0] <= decoder_result.is_jal
                             rs[i].is_jalr[0] <= decoder_result.is_jalr
                             rs[i].is_lui[0] <= decoder_result.is_lui
@@ -207,11 +253,15 @@ class IsserImpl(Downstream):
                             rs[i].pc_addr[0] <= pc_addr
                             rs[i].is_syscall[0] <= decoder_result.is_ecall | decoder_result.is_ebreak
 
-            # 输出给 fetcherimpl 的握手/停顿信号
             stall_pc = pc_addr
-            # 分支指令发射后暂停取指，等待 ALU 计算出跳转目标再由 start_signal 重新启动
-        # re 为 0 时直接保持默认值 0；只有 re 为 1 时上面的 Condition 会覆盖
-        return stall, stall_pc, stop_signal
+        
+        return IssueControl_signal.bundle(
+            predict_valid = predict_valid,
+            predict_target_pc = predict_target_pc,
+            jalr_stall = jalr_stall,
+            stall = stall,
+            stall_pc = stall_pc,
+        )
 
 class Fetcher(Module):
     def __init__(self):
@@ -224,6 +274,78 @@ class Fetcher(Module):
         pc_addr = pc_reg[0]
         return pc_reg, pc_addr
 
+
+class FetchControl(Downstream):
+    """
+    统一的取指控制 Downstream
+    整合来自 Issue 和 CDB 的所有控制信号，同周期传递给 Fetcher
+    
+    优先级（从高到低）：
+    1. flush (mispredicted): 预测错误，跳转到 correct_pc
+    2. jalr_resolved: JALR 执行完成，跳转到计算出的地址
+    3. jalr_stall: 遇到 JALR，暂停取指
+    4. predict_valid: B/JAL 预测跳转
+    5. stall: 资源冲突 stall
+    6. normal: PC + 4
+    """
+    def __init__(self):
+        super().__init__()
+    
+    @downstream.combinational
+    def build(self,
+              issue_ctrl,      # IssueControl_signal RecordValue
+              branch_ctrl,     # BranchControl_signal RecordValue
+              ):
+        # Issue 控制信号 - 使用 .value().optional() 模式
+        issue_payload = issue_ctrl.value().optional(default=IssueControl_signal.bundle(
+            predict_valid = Bits(1)(0),
+            predict_target_pc = UInt(32)(0),
+            jalr_stall = Bits(1)(0),
+            stall = Bits(1)(0),
+            stall_pc = UInt(32)(0),
+        ).value())
+        issue = IssueControl_signal.view(issue_payload)
+        
+        # Branch 控制信号
+        branch_payload = branch_ctrl.value().optional(default=BranchControl_signal.bundle(
+            jalr_resolved = Bits(1)(0),
+            jalr_target_pc = UInt(32)(0),
+            mispredicted = Bits(1)(0),
+            correct_pc = UInt(32)(0),
+        ).value())
+        branch = BranchControl_signal.view(branch_payload)
+        
+        # 计算最终的控制信号
+        # 优先级：flush > jalr_resolved > jalr_stall > predict > stall > normal
+        
+        # 最终输出
+        do_flush = branch.mispredicted
+        do_jalr_resume = branch.jalr_resolved & (~do_flush)
+        do_jalr_stall = issue.jalr_stall & (~do_flush) & (~do_jalr_resume)
+        do_predict = issue.predict_valid & (~do_flush) & (~do_jalr_resume) & (~do_jalr_stall)
+        do_stall = issue.stall & (~do_flush) & (~do_jalr_resume) & (~do_jalr_stall) & (~do_predict)
+        
+        # 目标 PC
+        target_pc = do_flush.select(branch.correct_pc,
+                    do_jalr_resume.select(branch.jalr_target_pc,
+                    do_predict.select(issue.predict_target_pc,
+                    issue.stall_pc)))  # stall 时保持当前 PC
+        
+        # 是否停止取指
+        stop_fetch = do_jalr_stall
+        
+        # 是否重新启动取指（从停止状态恢复）
+        restart_fetch = do_flush | do_jalr_resume
+        
+        # 是否跳转（不是 PC+4）
+        do_jump = do_flush | do_jalr_resume | do_predict
+        
+        log("FetchCtrl: flush={} jalr_resume={} jalr_stall={} predict={} stall={} target=0x{:08x}",
+            do_flush, do_jalr_resume, do_jalr_stall, do_predict, do_stall, target_pc)
+        
+        return do_flush, do_stall, do_jalr_stall, do_predict, do_jump, restart_fetch, target_pc, issue.stall_pc
+
+
 class FetcherImpl(Downstream):
     def __init__(self):
         super().__init__()
@@ -232,38 +354,68 @@ class FetcherImpl(Downstream):
             icache: SRAM,
             pc_reg: RegArray,
             pc_addr: Value,
-            stall: Value,
-            stall_pc: Value,
-            stop_signal: Value,
-            start_signal: Value,
+            # FetchControl 的输出
+            do_flush: Value,
+            do_stall: Value,
+            do_jalr_stall: Value,
+            do_predict: Value,
+            do_jump: Value,
+            restart_fetch: Value,
             target_pc: Value,
+            stall_pc: Value,
             issuer: Issuer):
-        stall = stall.optional(default=Bits(1)(0))
-        stall_pc = stall_pc.optional(default=UInt(32)(0))
-        stop_signal = stop_signal.optional(default=Bits(1)(0))
-        pc_addr = pc_addr.optional(default=UInt(32)(0))
-        start_signal = start_signal.optional(default=Bits(1)(0))
+        
+        # 设置默认值
+        do_flush = do_flush.optional(default=Bits(1)(0))
+        do_stall = do_stall.optional(default=Bits(1)(0))
+        do_jalr_stall = do_jalr_stall.optional(default=Bits(1)(0))
+        do_predict = do_predict.optional(default=Bits(1)(0))
+        do_jump = do_jump.optional(default=Bits(1)(0))
+        restart_fetch = restart_fetch.optional(default=Bits(1)(0))
         target_pc = target_pc.optional(default=UInt(32)(0))
+        stall_pc = stall_pc.optional(default=UInt(32)(0))
+        pc_addr = pc_addr.optional(default=UInt(32)(0))
+        
+        # 取指使能寄存器：跟踪是否处于停止状态
         re_reg = RegArray(Bits(1), 1, initializer=[1])
-        start_effective = start_signal & (~re_reg[0])  # 只在 re_reg 处于停住状态时响应 start
-        fetch_pc = stall.select(stall_pc,
-                                   start_effective.select(target_pc, pc_addr))
-        re = stall.select(
-            Bits(1)(1),
-            start_effective.select(Bits(1)(1),
-            stop_signal.select(
-                Bits(1)(0), re_reg[0]
-            )
-        ))
+        
+        # 判断是否从停止状态恢复
+        was_stopped = ~re_reg[0]
+        resume_from_stop = was_stopped & restart_fetch
+        
+        # 计算最终的取指 PC
+        # 1. flush/jalr_resume: 跳转到 target_pc
+        # 2. predict: 跳转到预测目标
+        # 3. stall: 保持 stall_pc
+        # 4. normal: 使用当前 pc_addr
+        fetch_pc = do_stall.select(stall_pc,
+                   do_jump.select(target_pc,
+                   resume_from_stop.select(target_pc, pc_addr)))
+        
+        # 计算取指使能
+        # 停止条件：jalr_stall（且不是在恢复）
+        # 恢复条件：restart_fetch
+        re = do_stall.select(Bits(1)(1),  # stall 时继续取同一条
+             restart_fetch.select(Bits(1)(1),  # 恢复时开始取指
+             do_jalr_stall.select(Bits(1)(0),  # jalr_stall 时停止
+             re_reg[0])))  # 否则保持之前状态
+        
         re_reg[0] <= re
+        
+        # 构建 icache 访问
         word_addr = (fetch_pc >> UInt(32)(2)).bitcast(UInt(32))
         icache.build(we = Bits(1)(0),
                      re = re,
                      addr = word_addr.bitcast(Bits(icache.addr_width)),
                      wdata = Bits(32)(0))
-        log("fetcherimpl: fetch_pc=0x{:08x} stall={} start={} target=0x{:08x} re={}", fetch_pc, stall, start_signal, target_pc, re)
+        
+        log("fetcherimpl: fetch_pc=0x{:08x} do_stall={} do_jump={} restart={} re={}", 
+            fetch_pc, do_stall, do_jump, restart_fetch, re)
+        
         with Condition(re == Bits(1)(1)):
-            pc_reg[0] <= fetch_pc + UInt(32)(4)
+            # 更新 PC 寄存器
+            next_pc = do_jump.select(target_pc + UInt(32)(4), fetch_pc + UInt(32)(4))
+            pc_reg[0] <= next_pc
             # 将当前 PC 传递给 issuer
             issuer.async_called(pc_addr=fetch_pc)
 
@@ -290,6 +442,48 @@ class Driver(Module):
         return tick_reg[0]
 
 
+class FlushControl(Downstream):
+    """
+    Flush 控制 Downstream
+    当检测到预测错误时，清理流水线状态
+    """
+    def __init__(self):
+        super().__init__()
+    
+    @downstream.combinational
+    def build(self,
+              do_flush: Value,
+              rat: RAT,
+              rob: ROB,
+              rs: list[RSEntry],
+              lsq: LSQEntry,
+              metadata: Value):
+        do_flush = do_flush.optional(default=Bits(1)(0))
+        metadata = metadata.optional(default=Bits(8)(0))
+        _ = metadata == metadata  # 确保每周期触发
+        
+        with Condition(do_flush):
+            log("FLUSH: Misprediction detected! Clearing pipeline...")
+            # 1. 清空 RAT
+            rat.flush_all()
+            
+            # 2. 清空 ROB（重置指针，清空状态）
+            rob.flush()
+            
+            # 3. 清空所有 RS
+            for i in range(RS_ENTRY_NUM):
+                rs[i].busy[0] <= Bits(1)(0)
+                rs[i].fired[0] <= Bits(1)(0)
+                rs[i].qj_valid[0] <= Bits(1)(0)
+                rs[i].qk_valid[0] <= Bits(1)(0)
+            
+            # 4. 清空 LSQ
+            lsq.busy[0] <= Bits(1)(0)
+            lsq.fired[0] <= Bits(1)(0)
+            lsq.qj_valid[0] <= Bits(1)(0)
+            lsq.qk_valid[0] <= Bits(1)(0)
+
+
 current_path = os.path.dirname(os.path.abspath(__file__))
 workspace = f'{current_path}/workspace/'
 
@@ -306,9 +500,11 @@ def build_CPU(depth_log=18, data_base=0x2000):
         dcache.name = "dcache"
         
         regs = RegArray(UInt(32), 32, initializer=[0]*32)
-        reg_pending = RegArray(Bits(REG_PENDING_WIDTH), 32, initializer=[0]*32)
+        # 使用新的 RAT 类（32个独立RegArray）
+        rat = RAT()
+        # 使用 BHT 进行分支预测（64条目，2-bit饱和计数器）
+        bht = BHT()
 
-        
         fetcher = Fetcher()
         issuer = Issuer()
         issueimpl = IsserImpl()
@@ -323,15 +519,16 @@ def build_CPU(depth_log=18, data_base=0x2000):
         mem_access = MemeoryAccess()
         cdb_arbitrator = CDB_Arbitrator()
         committer = Commiter()
-
         fetcherimpl = FetcherImpl()
+        fetch_control = FetchControl()
+        flush_control = FlushControl()
 
-
+        # 构建各模块
         pc_reg, pc_addr = fetcher.build()
         mem_we, mem_addr, mem_data = committer.build(
             rob = rob,
             regs = regs,
-            reg_pending = reg_pending,
+            rat = rat,  # 传入 RAT 对象
         )
 
         lsu_cbd_signal = lsu.build(dcache=dcache)
@@ -344,61 +541,94 @@ def build_CPU(depth_log=18, data_base=0x2000):
             committer=committer,
         )
         
-        cbd_signal, start_signal, target_pc = cdb_arbitrator.build(
+        # CDB Arbitrator 现在返回 CBD_signal 和 BranchControl_signal
+        # 同时负责更新 BHT
+        cbd_signal, branch_ctrl = cdb_arbitrator.build(
             LSU_CBD_req=lsu_cbd_signal,
             ALU_CBD_req=alu_cbd_signal_list,
             rob=rob,
+            bht=bht,  # 传入 BHT 用于更新
             metadata=metadata,
         )
+        
         issue_pc_addr, instr, re = issuer.build(icache=icache)
-        stall, stall_pc, stop_signal = issueimpl.build(
+        
+        # Issue 产生预测控制信号（使用 BHT 预测）
+        issue_ctrl = issueimpl.build(
             pc_addr=issue_pc_addr,
             instr=instr,
             re=re,
             rob=rob,
             rs=rs,
             lsq=lsq,
-            reg_pending=reg_pending,
+            rat=rat,
             regs=regs,
+            bht=bht,  # 传入 BHT 用于预测
             cbd_signal=cbd_signal,
         )
-        re, read_addr = lsq_downstream.build(
+        
+        # FetchControl 整合所有控制信号
+        do_flush, do_stall, do_jalr_stall, do_predict, do_jump, restart_fetch, target_pc, stall_pc = fetch_control.build(
+            issue_ctrl=issue_ctrl,
+            branch_ctrl=branch_ctrl,
+        )
+        
+        # FlushControl 处理 flush 时的清理
+        flush_control.build(
+            do_flush=do_flush,
+            rat=rat,
+            rob=rob,
+            rs=rs,
+            lsq=lsq,
+            metadata=metadata,
+        )
+        
+        # LSQ downstream
+        lsq_re, read_addr = lsq_downstream.build(
             lsq=lsq,
             cbd_signal=cbd_signal,
             lsu=lsu,
             rob=rob,
             regs=regs,
-            issue_stall=stall,
+            issue_stall=do_stall,
             metadata=metadata,
         )
+        
+        # RS downstreams
         for i in range(RS_ENTRY_NUM):
             rs_downstream[i].build(
                 rs=rs[i],
                 alu=alu[i],
                 cbd_signal=cbd_signal,
-                issue_stall=stall,
+                issue_stall=do_stall,
                 metadata=metadata,
             )
+        
+        # Memory access
         mem_access.build(
             dcache=dcache,
             data=mem_data,
-            mem_read=re,
+            mem_read=lsq_re,
             mem_write=mem_we,
             read_addr=read_addr,
             write_addr=mem_addr,
             data_base=UInt(32)(data_base),
         )
         
+        # FetcherImpl 使用新的控制信号
         fetcherimpl.build(
             icache=icache,
             pc_reg=pc_reg,
             pc_addr=pc_addr,
-            stall=stall,
-            stall_pc=stall_pc,
-            stop_signal=stop_signal,
-            start_signal=start_signal,
+            do_flush=do_flush,
+            do_stall=do_stall,
+            do_jalr_stall=do_jalr_stall,
+            do_predict=do_predict,
+            do_jump=do_jump,
+            restart_fetch=restart_fetch,
             target_pc=target_pc,
-            issuer=issuer
+            stall_pc=stall_pc,
+            issuer=issuer,
         )
     return sys
 

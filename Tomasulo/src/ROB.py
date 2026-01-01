@@ -6,6 +6,128 @@ ROB_IDX_WIDTH = (FIFO_SIZE - 1).bit_length()
 # reg_pending 需要一个额外的 sentinel，因此使用更宽的位宽
 REG_PENDING_WIDTH = ROB_IDX_WIDTH + 1
 
+# BHT 配置
+BHT_SIZE = 64  # BHT 条目数量（2^6 = 64）
+BHT_IDX_WIDTH = 6  # 用 PC[7:2] 作为索引（跳过低2位对齐）
+
+
+class BHT:
+    """
+    Branch History Table - 分支历史表
+    使用 2-bit 饱和计数器进行分支预测
+    
+    计数器状态：
+    - 00 (0): 强不跳转 (Strongly Not Taken)
+    - 01 (1): 弱不跳转 (Weakly Not Taken)
+    - 10 (2): 弱跳转   (Weakly Taken)
+    - 11 (3): 强跳转   (Strongly Taken)
+    
+    预测：计数器 >= 2 时预测跳转
+    更新：taken +1（饱和到3），not taken -1（饱和到0）
+    """
+    def __init__(self):
+        # 单个 RegArray 存储所有 64 个 2-bit 计数器
+        # 初始化为 2（弱跳转）
+        self.counters = RegArray(Bits(2), BHT_SIZE, initializer=[2] * BHT_SIZE)
+    
+    def get_index(self, pc: Value) -> Value:
+        """
+        从 PC 计算 BHT 索引
+        使用 PC[7:2]（跳过低2位字节对齐），然后取模确保在范围内
+        """
+        # PC >> 2 得到字地址，然后 & (BHT_SIZE-1) 取模
+        word_addr = (pc >> UInt(32)(2)).bitcast(UInt(32))
+        return (word_addr & UInt(32)(BHT_SIZE - 1)).bitcast(Bits(BHT_IDX_WIDTH))
+    
+    def predict(self, pc: Value) -> Value:
+        """
+        根据 PC 预测是否跳转
+        返回 Bits(1): 1=预测跳转, 0=预测不跳转
+        """
+        idx = self.get_index(pc)
+        counter = self.counters[idx]  # 直接索引读取
+        # 计数器 >= 2 时预测跳转
+        return (counter >= Bits(2)(2)).select(Bits(1)(1), Bits(1)(0))
+    
+    def update_if(self, cond: Value, pc: Value, taken: Value):
+        """
+        条件更新：仅当 cond=1 时更新
+        taken=1: 计数器+1（饱和到3）
+        taken=0: 计数器-1（饱和到0）
+        """
+        idx = self.get_index(pc)
+        old_val = self.counters[idx]
+        # 饱和加减
+        new_val = taken.select(
+            # taken: +1, 饱和到 3
+            (old_val == Bits(2)(3)).select(Bits(2)(3), old_val + Bits(2)(1)),
+            # not taken: -1, 饱和到 0
+            (old_val == Bits(2)(0)).select(Bits(2)(0), old_val - Bits(2)(1))
+        )
+        with Condition(cond):
+            self.counters[idx] <= new_val
+
+
+# RAT: 32个独立的RegArray，支持同周期flush
+class RAT:
+    """
+    Register Alias Table - 重命名表
+    使用32个独立的RegArray实现，以便支持同周期全部flush
+    每个entry存储 rob_idx + 1，0表示无依赖
+    """
+    def __init__(self):
+        # 32个独立的RegArray，每个存储一个寄存器的pending信息
+        self.pending = [RegArray(Bits(REG_PENDING_WIDTH), 1, initializer=[0]) 
+                       for _ in range(32)]
+    
+    def read(self, reg_idx: Value) -> Value:
+        """
+        组合逻辑读取指定寄存器的pending信息
+        返回 rob_idx + 1，0表示无依赖
+        """
+        result = Bits(REG_PENDING_WIDTH)(0)
+        for i in range(32):
+            result = (reg_idx == Bits(5)(i)).select(self.pending[i][0], result)
+        return result
+    
+    def __getitem__(self, reg_idx: Value) -> Value:
+        """支持 rat[reg_idx] 语法的读取"""
+        return self.read(reg_idx)
+    
+    def write(self, reg_idx: Value, value: Value):
+        """
+        时序逻辑写入，在Condition中调用
+        只写入指定的一个寄存器
+        """
+        for i in range(32):
+            with Condition(reg_idx == Bits(5)(i)):
+                self.pending[i][0] <= value
+    
+    def write_if(self, cond: Value, reg_idx: Value, value: Value):
+        """
+        带条件的写入，用于处理 rd != 0 等情况
+        """
+        for i in range(32):
+            with Condition(cond & (reg_idx == Bits(5)(i))):
+                self.pending[i][0] <= value
+    
+    def clear_if(self, reg_idx: Value, expected_value: Value):
+        """
+        条件清零，仅当当前值等于expected_value时才清零
+        用于commit时清理：只有RAT仍指向当前ROB entry时才清零
+        """
+        for i in range(32):
+            cond = (reg_idx == Bits(5)(i)) & (self.pending[i][0] == expected_value)
+            with Condition(cond):
+                self.pending[i][0] <= Bits(REG_PENDING_WIDTH)(0)
+    
+    def flush_all(self):
+        """
+        Flush时调用，同周期清空所有32个entry
+        """
+        for i in range(32):
+            self.pending[i][0] <= Bits(REG_PENDING_WIDTH)(0)
+
 
 # ROB: 按字段分布式存储为寄存器队列，同时维护头尾指针
 class ROB:
@@ -26,6 +148,12 @@ class ROB:
         # store 专用字段：地址与数据
         self.store_addr = RegArray(UInt(32), FIFO_SIZE, initializer=[0] * FIFO_SIZE)
         self.store_data = RegArray(UInt(32), FIFO_SIZE, initializer=[0] * FIFO_SIZE)
+        
+        # 分支预测相关字段
+        self.predicted_taken = RegArray(Bits(1), FIFO_SIZE, initializer=[0] * FIFO_SIZE)
+        self.predicted_pc = RegArray(UInt(32), FIFO_SIZE, initializer=[0] * FIFO_SIZE)
+        # is_jalr 标记，JALR不预测，需要特殊处理
+        self.is_jalr = RegArray(Bits(1), FIFO_SIZE, initializer=[0] * FIFO_SIZE)
     def is_full(self) -> Bits:
         """
         判断 ROB 是否已满：next_tail 与 head 重合且 head 位置忙。
@@ -40,3 +168,20 @@ class ROB:
         for i in range(FIFO_SIZE):
             no_store = no_store & ~self.is_store[i]
         return no_store
+    
+    def flush(self):
+        """
+        Flush ROB：重置tail到head，清空所有busy位
+        用于分支预测失败时的恢复
+        """
+        # 重置tail指针到head
+        self.tail[0] <= self.head[0]
+        # 清空所有entry的busy位（保留head处如果正在commit）
+        for i in range(FIFO_SIZE):
+            self.busy[i] <= Bits(1)(0)
+            self.ready[i] <= Bits(1)(0)
+            self.is_branch[i] <= Bits(1)(0)
+            self.is_syscall[i] <= Bits(1)(0)
+            self.is_store[i] <= Bits(1)(0)
+            self.is_jalr[i] <= Bits(1)(0)
+            self.predicted_taken[i] <= Bits(1)(0)

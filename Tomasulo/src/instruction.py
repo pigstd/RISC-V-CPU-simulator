@@ -244,6 +244,7 @@ deocder_signals = Record(
     mem_write = Bits(1),
     is_branch = Bits(1),
     branch_type = Bits(3),
+    is_B = Bits(1),  # 条件分支 B 类型指令
     is_jal = Bits(1),
     is_jalr = Bits(1),
     is_ecall = Bits(1),
@@ -251,4 +252,6 @@ deocder_signals = Record(
     is_lui = Bits(1),
     is_auipc = Bits(1),
     is_valid = Bits(1),
+    # 分支预测相关：B/JAL可预测跳转，JALR需要stall
+    is_predictable_branch = Bits(1),  # B 或 JAL，可以预测
 )

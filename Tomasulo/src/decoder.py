@@ -7,10 +7,15 @@ except ImportError:
     from Tomasulo.src.instruction import *
     from Tomasulo.src.ROB import *
 
+from typing import Union
 
 @rewrite_assign
-def decoder_logic(inst, reg_pending : RegArray, regs: RegArray
+def decoder_logic(inst, reg_pending: Union[RegArray, 'RAT'], regs: RegArray
                   , rob : ROB, cbd : Value):
+    """
+    解码器逻辑，支持旧的RegArray和新的RAT类型
+    reg_pending: 可以是 RegArray 或 RAT 对象
+    """
     is_eq = {}
     [is_R, R_rs1, R_rs2, R_rd, R_alu] = decoder_R_type(inst=inst, is_eq=is_eq)
     [is_I, I_rs1, I_imm, I_rd, I_alu] = decoder_I_type(inst=inst, is_eq=is_eq)
@@ -157,6 +162,8 @@ def decoder_logic(inst, reg_pending : RegArray, regs: RegArray
     
     is_valid = rs1_valid & rs2_valid
 
+    # 分支预测：B指令和JAL可以预测（PC+offset），JALR不能预测
+    is_predictable_branch = is_B | is_jal
 
     # log("decoder: rs1_used = {} , rs1 = {}", rs1_used, rs1)
     # log("decoder: rs2_used = {} , rs2 = {}", rs2_used, rs2)
@@ -190,4 +197,6 @@ def decoder_logic(inst, reg_pending : RegArray, regs: RegArray
         is_lui=is_lui,
         is_auipc=is_auipc,
         is_valid=is_valid,
+        is_predictable_branch=is_predictable_branch,
+        is_B=is_B,  # 条件分支 B 类型指令
     )
