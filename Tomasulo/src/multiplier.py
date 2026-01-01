@@ -14,6 +14,9 @@ except ImportError:
 # 乘法器周期数
 MUL_LATENCY = 4
 
+# 乘法保留站数量
+MUL_RS_NUM = 2
+
 # 乘法器输入信号
 MUL_signal = Record(
     op1_val = UInt(32),    # 操作数 1
@@ -163,8 +166,9 @@ class MUL_RSEntry:
 class MUL_RS_downstream(Downstream):
     """乘法保留站的 downstream 逻辑"""
     
-    def __init__(self):
+    def __init__(self, rs_idx=0):
         super().__init__()
+        self.rs_idx = rs_idx  # 标识处理的 RS entry 索引
     
     @downstream.combinational
     def build(self,
