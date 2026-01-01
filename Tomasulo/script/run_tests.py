@@ -277,7 +277,7 @@ def main():
         return
 
     print(f"Running {len(targets)} test(s) with Tomasulo simulator...\n")
-    header = f"{'Test Name':<20} {'Status':<6} {'Cycles':>8} {'Commits':>8} {'Branches':>8} {'Mispred':>8} {'Acc%':>6} Message"
+    header = f"{'Test Name':<20} {'Status':<6} {'Cycles':>8} {'Instrs':>8} {'Branches':>8} {'Mispred':>8} {'Acc%':>6} Message"
     separator = "-" * len(header)
     print(header)
     print(separator)
@@ -296,12 +296,14 @@ def main():
         # 计算预测正确率
         branches = stats.get('branches', 0)
         mispreds = stats.get('mispreds', 0)
+        commits = stats.get('commits', 0)
+        instrs = commits + mispreds  # 总指令数 = 提交数 + 误预测数
         if branches > 0:
             accuracy = (branches - mispreds) / branches * 100
             acc_str = f"{accuracy:.1f}"
         else:
             acc_str = "N/A"
-        line = f"{name:<20} {status:<6} {stats['cycles']:>8} {stats['commits']:>8} {branches:>8} {mispreds:>8} {acc_str:>6} {msg}"
+        line = f"{name:<20} {status:<6} {stats['cycles']:>8} {instrs:>8} {branches:>8} {mispreds:>8} {acc_str:>6} {msg}"
         print(line)
         report_lines.append(line)
         passed += int(ok)
