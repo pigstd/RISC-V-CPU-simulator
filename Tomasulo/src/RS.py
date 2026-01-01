@@ -52,61 +52,51 @@ class RS_downstream(Downstream):
     def build(self,
               rs: RSEntry,
               alu : ALU,
-              cbd_signal: Value,
-              mul_broadcast: Value,  # 乘法器完成广播 (rob_idx, rd_data, is_done)
+              all_broadcasts: list,  # 所有广播信号 [(rob_idx, rd_data, valid), ...]
               issue_stall: Value,
               metadata: Value):
+        """
+        监听所有广播线更新操作数，就绪时发射到 ALU
+        
+        all_broadcasts: 包含所有执行单元的广播信号
+          - alu_broadcasts[0..3]: 4 个 ALU 的广播
+          - lsu_broadcast: LSU 的广播
+          - mul_broadcasts[0..1]: 2 个乘法器的广播
+        """
         # 依赖 Issuer 的输出，保证在有发射动作时也会调度 RS_downstream
         issue_stall = issue_stall.optional(default=Bits(1)(0))
         metadata = metadata.optional(default=UInt(8)(0))
         # 人为依赖 metadata，确保每周期都触发一次（即使上游无事件）
         _ = metadata == metadata
         
-        # 解包乘法器广播信号
-        mul_rob_idx, mul_rd_data, mul_is_done = mul_broadcast
-        mul_rob_idx = mul_rob_idx.optional(default=UInt(ROB_IDX_WIDTH)(0))
-        mul_rd_data = mul_rd_data.optional(default=UInt(32)(0))
-        mul_is_done = mul_is_done.optional(default=Bits(1)(0))
-        
         log("RS downstream metadata={} busy={} qj_v={} qk_v={} rob_idx={} op={:014b}", metadata, rs.busy[0], rs.qj_valid[0], rs.qk_valid[0], rs.rob_idx[0], rs.op[0])
-        log("cbd_signal valid={} ROB_idx={} rd_data=0x{:08x}", cbd_signal.valid, cbd_signal.ROB_idx, cbd_signal.rd_data)
         
         busy_flag = rs.busy[0]
         
-        # 监听 CDB 广播，更新操作数
-        with Condition(cbd_signal.valid & (busy_flag == Bits(1)(1))):
-            # 如果有新的广播信号，更新 RS 中等待的操作数
-            with Condition((rs.qj[0] == cbd_signal.ROB_idx) & ~rs.qj_valid[0]):
-                rs.vj[0] <= cbd_signal.rd_data
-                rs.qj_valid[0] <= Bits(1)(1)  # 标记为就绪
-            with Condition((rs.qk[0] == cbd_signal.ROB_idx) & ~rs.qk_valid[0]):
-                rs.vk[0] <= cbd_signal.rd_data
-                rs.qk_valid[0] <= Bits(1)(1)  # 标记为就绪
-        
-        # 监听乘法器完成广播，更新操作数
-        with Condition(mul_is_done & (busy_flag == Bits(1)(1))):
-            # 检查 qj 是否在等待乘法器的结果
-            mul_qj_match = (~rs.qj_valid[0]) & (rs.qj[0] == mul_rob_idx)
-            with Condition(mul_qj_match):
-                rs.qj_valid[0] <= Bits(1)(1)
-                rs.vj[0] <= mul_rd_data
-                log("RS: update qj from MUL, rob={} data=0x{:08x}", mul_rob_idx, mul_rd_data)
+        # 监听所有广播信号，更新操作数
+        for bcast_idx, (bcast_rob_idx, bcast_rd_data, bcast_valid) in enumerate(all_broadcasts):
+            bcast_rob_idx = bcast_rob_idx.optional(default=UInt(ROB_IDX_WIDTH)(0))
+            bcast_rd_data = bcast_rd_data.optional(default=UInt(32)(0))
+            bcast_valid = bcast_valid.optional(default=Bits(1)(0))
             
-            # 检查 qk 是否在等待乘法器的结果
-            mul_qk_match = (~rs.qk_valid[0]) & (rs.qk[0] == mul_rob_idx)
-            with Condition(mul_qk_match):
-                rs.qk_valid[0] <= Bits(1)(1)
-                rs.vk[0] <= mul_rd_data
-                log("RS: update qk from MUL, rob={} data=0x{:08x}", mul_rob_idx, mul_rd_data)
+            with Condition(bcast_valid & (busy_flag == Bits(1)(1))):
+                # 如果有新的广播信号，更新 RS 中等待的操作数
+                with Condition((rs.qj[0] == bcast_rob_idx) & ~rs.qj_valid[0]):
+                    rs.vj[0] <= bcast_rd_data
+                    rs.qj_valid[0] <= Bits(1)(1)  # 标记为就绪
+                    log("RS: update qj from bcast, rob={} data=0x{:08x}", bcast_rob_idx, bcast_rd_data)
+                with Condition((rs.qk[0] == bcast_rob_idx) & ~rs.qk_valid[0]):
+                    rs.vk[0] <= bcast_rd_data
+                    rs.qk_valid[0] <= Bits(1)(1)  # 标记为就绪
+                    log("RS: update qk from bcast, rob={} data=0x{:08x}", bcast_rob_idx, bcast_rd_data)
+                    
+                # 如果广播的 ROB 索引匹配当前 RS 的目标，清空 RS
+                with Condition(bcast_rob_idx == rs.rob_idx[0]):
+                    rs.busy[0] <= Bits(1)(0)
+                    rs.qj_valid[0] <= Bits(1)(0)
+                    rs.qk_valid[0] <= Bits(1)(0)
+                    rs.fired[0] <= Bits(1)(0)
         
-        # 需要显式括号，否则 Python 运算符优先级会把 & 和 == 搅在一起
-        with Condition(cbd_signal.valid & (busy_flag == Bits(1)(1)) &
-                       (cbd_signal.ROB_idx == rs.rob_idx[0])):
-            # 如果 ROB 提交了该指令，清空 RS entry
-            rs.busy[0] <= Bits(1)(0)
-            rs.qj_valid[0] <= Bits(1)(0)
-            rs.qk_valid[0] <= Bits(1)(0)
-            rs.fired[0] <= Bits(1)(0)
         with Condition((busy_flag == Bits(1)(1)) & ~(rs.qj_valid[0] & rs.qk_valid[0])):
             log("RS waiting rob_idx={} qj_valid={} qk_valid={} qj={} qk={}", rs.rob_idx[0], rs.qj_valid[0], rs.qk_valid[0], rs.qj[0], rs.qk[0])
         with Condition((busy_flag == Bits(1)(1)) & (rs.qj_valid[0] & rs.qk_valid[0]) & (rs.fired[0] == Bits(1)(0))):

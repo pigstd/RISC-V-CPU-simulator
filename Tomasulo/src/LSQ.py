@@ -32,7 +32,7 @@ class LSQEntry:
 
 class LSQ_downstream(Downstream):
     """
-    接收 CDB 信号更新 LSQ entry，并在 commit/flush 后清空。
+    接收所有广播信号更新 LSQ entry，并在 commit/flush 后清空。
     """
     def __init__(self):
         super().__init__()
@@ -40,7 +40,7 @@ class LSQ_downstream(Downstream):
     @downstream.combinational
     def build(self,
               lsq: LSQEntry,
-              cbd_signal: Value,
+              all_broadcasts: list,  # 所有广播信号 [(rob_idx, rd_data, valid), ...]
               lsu : LSU,
               rob : ROB,
               regs: RegArray,
@@ -50,21 +50,33 @@ class LSQ_downstream(Downstream):
         metadata = metadata.optional(default=UInt(8)(0))
         _ = metadata == metadata
         log("LSQ downstream metadata={} busy={} qj_v={} qk_v={} rob_idx={}", metadata, lsq.busy[0], lsq.qj_valid[0], lsq.qk_valid[0], lsq.rob_idx[0])
-        with Condition(cbd_signal.valid & (lsq.busy[0] == Bits(1)(1))):
-            # 如果有新的广播信号，更新 lsq 中等待的操作数
-            with Condition((lsq.qj[0] == cbd_signal.ROB_idx) & ~lsq.qj_valid[0]):
-                lsq.vj[0] <= cbd_signal.rd_data
-                lsq.qj_valid[0] <= Bits(1)(1)  # 标记为就绪
-            with Condition((lsq.qk[0] == cbd_signal.ROB_idx) & ~lsq.qk_valid[0]):
-                lsq.vk[0] <= cbd_signal.rd_data
-                lsq.qk_valid[0] <= Bits(1)(1)  # 标记为就绪
-        # 注意加括号，避免 &/== 或 ^/== 的优先级问题
-        with Condition(cbd_signal.valid & (lsq.busy[0] == Bits(1)(1)) &
-                       (cbd_signal.ROB_idx == lsq.rob_idx[0])):
-            lsq.busy[0] <= Bits(1)(0)
-            lsq.qj_valid[0] <= Bits(1)(0)
-            lsq.qk_valid[0] <= Bits(1)(0)
-            lsq.fired[0] <= Bits(1)(0)
+        
+        busy_flag = lsq.busy[0]
+        
+        # 监听所有广播信号，更新操作数
+        for bcast_idx, (bcast_rob_idx, bcast_rd_data, bcast_valid) in enumerate(all_broadcasts):
+            bcast_rob_idx = bcast_rob_idx.optional(default=UInt(ROB_IDX_WIDTH)(0))
+            bcast_rd_data = bcast_rd_data.optional(default=UInt(32)(0))
+            bcast_valid = bcast_valid.optional(default=Bits(1)(0))
+            
+            with Condition(bcast_valid & (busy_flag == Bits(1)(1))):
+                # 如果有新的广播信号，更新 lsq 中等待的操作数
+                with Condition((lsq.qj[0] == bcast_rob_idx) & ~lsq.qj_valid[0]):
+                    lsq.vj[0] <= bcast_rd_data
+                    lsq.qj_valid[0] <= Bits(1)(1)  # 标记为就绪
+                    log("LSQ: update qj from bcast, rob={} data=0x{:08x}", bcast_rob_idx, bcast_rd_data)
+                with Condition((lsq.qk[0] == bcast_rob_idx) & ~lsq.qk_valid[0]):
+                    lsq.vk[0] <= bcast_rd_data
+                    lsq.qk_valid[0] <= Bits(1)(1)  # 标记为就绪
+                    log("LSQ: update qk from bcast, rob={} data=0x{:08x}", bcast_rob_idx, bcast_rd_data)
+                    
+                # 如果广播的 ROB 索引匹配当前 LSQ 的目标，清空 LSQ
+                with Condition(bcast_rob_idx == lsq.rob_idx[0]):
+                    lsq.busy[0] <= Bits(1)(0)
+                    lsq.qj_valid[0] <= Bits(1)(0)
+                    lsq.qk_valid[0] <= Bits(1)(0)
+                    lsq.fired[0] <= Bits(1)(0)
+        
         log("LSQ debug: busy={} is_load={} is_store={} qj_v={} qk_v={} has_no_store={}", lsq.busy[0], lsq.is_load[0], lsq.is_store[0], lsq.qj_valid[0], lsq.qk_valid[0], rob.has_no_store())
         with Condition(lsq.busy[0] & ~(lsq.qj_valid[0] & lsq.qk_valid[0])):
             log("LSQ waiting rob_idx={} qj_valid={} qk_valid={} qj={} qk={}", lsq.rob_idx[0], lsq.qj_valid[0], lsq.qk_valid[0], lsq.qj[0], lsq.qk[0])

@@ -4,6 +4,7 @@ from .alu import *
 from .ROB import *
 from .RS import RS_ENTRY_NUM, RS_NUM_WIDTH, RS_MAX
 
+# 统一的广播信号格式（用于所有执行单元）
 CBD_signal = Record(
     ROB_idx = UInt(ROB_IDX_WIDTH),    # 指令在 ROB 中的索引
     rd_data = UInt(32),   # 写回数据
@@ -20,20 +21,35 @@ BranchControl_signal = Record(
     correct_pc = UInt(32),     # 正确的 PC（用于 flush 后恢复）
 )
 
+
 class CDB_Arbitrator(Downstream):
+    """
+    无仲裁 CDB - 每个执行单元直接写 ROB
+    
+    优化后的架构：
+    - 4 个 ALU 各自独立广播
+    - 1 个 LSU 独立广播
+    - 2 个乘法器独立广播（在 main.py 中处理）
+    
+    每个执行单元完成时直接写入 ROB 对应条目，无需仲裁。
+    因为每条指令有唯一的 ROB 索引，同周期写不同索引不冲突。
+    """
     def __init__(self):
         super().__init__()
-    @downstream.combinational
-    def build(self, LSU_CBD_req: Value, ALU_CBD_req: list[Value], rob : ROB, bht: BHT, metadata : Value):
-        # 乘法器不经过 CDB arbitrator，直接在 MUL_Commit downstream 中处理
-        lsu_cbd_reg = RegArray(Bits(LSU_CBD_signal.bits), 1, initializer=[0])
-        alu_cbd_reg = [RegArray(Bits(ALU_CBD_signal.bits), 1, initializer=[0]) for _ in range(RS_ENTRY_NUM)]
-        # metadata 仅用于驱动 downstream，每周期都会访问一次
-        metadata = metadata.optional(default=UInt(8)(0))
-        log("CDB arb metadata={}", metadata)
         
-        # 为输入 request 增加默认值，避免第一次未产生请求时访问无效字段
-        # 给上下游提供安全的默认值（当 LSU/ALU 尚未产生输出时不会访问无效 Option）
+    @downstream.combinational
+    def build(self, LSU_CBD_req: Value, ALU_CBD_req: list[Value], rob: ROB, bht: BHT, metadata: Value):
+        """
+        返回:
+        - cbd_signal: 兼容的广播信号（仅用于 Issue 阶段的旁路）
+        - branch_ctrl: 分支控制信号
+        - alu_broadcasts: 4 个 ALU 的广播信号 [(rob_idx, rd_data, valid), ...]
+        - lsu_broadcast: LSU 的广播信号 (rob_idx, rd_data, valid)
+        """
+        metadata = metadata.optional(default=UInt(8)(0))
+        log("NoArb CDB metadata={}", metadata)
+        
+        # ========== 处理 LSU 请求 ==========
         lsu_payload = LSU_CBD_req.value().optional(default=LSU_CBD_signal.bundle(
             ROB_idx = UInt(ROB_IDX_WIDTH)(0),
             rd_data = UInt(32)(0),
@@ -44,8 +60,35 @@ class CDB_Arbitrator(Downstream):
             store_data = UInt(32)(0),
         ).value())
         lsu_req = LSU_CBD_signal.view(lsu_payload)
-
-        alu_req = []
+        
+        lsu_valid = lsu_req.valid
+        lsu_rob_idx = lsu_req.ROB_idx
+        lsu_rd_data = lsu_req.rd_data
+        lsu_is_store = lsu_req.is_store
+        lsu_store_addr = lsu_req.store_addr
+        lsu_store_data = lsu_req.store_data
+        
+        # LSU 直接写 ROB
+        with Condition(lsu_valid):
+            rob._write_ready(lsu_rob_idx, Bits(1)(1))
+            rob.value[lsu_rob_idx] <= lsu_rd_data
+            log("NoArb: LSU done, rob_idx={} rd_data=0x{:08x}", lsu_rob_idx, lsu_rd_data)
+            # Store 记录地址和数据
+            with Condition(lsu_is_store):
+                rob.store_addr[lsu_rob_idx] <= lsu_store_addr
+                rob.store_data[lsu_rob_idx] <= lsu_store_data
+        
+        # ========== 处理 ALU 请求 ==========
+        alu_broadcasts = []
+        
+        # 用于分支处理的变量 - 使用 Assassyn 类型
+        any_branch = Bits(1)(0)
+        branch_is_jalr = Bits(1)(0)
+        branch_is_B = Bits(1)(0)
+        branch_taken = Bits(1)(0)
+        branch_next_pc = UInt(32)(0)
+        branch_rob_idx = UInt(ROB_IDX_WIDTH)(0)
+        
         for i in range(RS_ENTRY_NUM):
             alu_payload = ALU_CBD_req[i].value().optional(default=ALU_CBD_signal.bundle(
                 ROB_idx = UInt(ROB_IDX_WIDTH)(0),
@@ -58,199 +101,80 @@ class CDB_Arbitrator(Downstream):
                 is_B = Bits(1)(0),
                 branch_taken = Bits(1)(0),
             ).value())
-            alu_req.append(ALU_CBD_signal.view(alu_payload))
+            alu_req = ALU_CBD_signal.view(alu_payload)
+            
+            alu_valid = alu_req.valid
+            alu_rob_idx = alu_req.ROB_idx
+            alu_rd_data = alu_req.rd_data
+            
+            # ALU 直接写 ROB
+            with Condition(alu_valid):
+                rob._write_ready(alu_rob_idx, Bits(1)(1))
+                rob.value[alu_rob_idx] <= alu_rd_data
+                log("NoArb: ALU done, rob_idx={} rd_data=0x{:08x}", alu_rob_idx, alu_rd_data)
+            
+            # 收集广播信号
+            alu_broadcasts.append((alu_rob_idx, alu_rd_data, alu_valid))
+            
+            # 收集分支信息（任意一个 ALU 可能产生分支）
+            # 使用条件选择累积分支信息，而不是 with Condition 赋值
+            is_this_branch = alu_valid & alu_req.is_branch
+            any_branch = any_branch | is_this_branch
+            branch_is_jalr = is_this_branch.select(alu_req.is_jalr, branch_is_jalr)
+            branch_is_B = is_this_branch.select(alu_req.is_B, branch_is_B)
+            branch_taken = is_this_branch.select(alu_req.branch_taken, branch_taken)
+            branch_next_pc = is_this_branch.select(alu_req.next_pc, branch_next_pc)
+            branch_rob_idx = is_this_branch.select(alu_rob_idx, branch_rob_idx)
         
-        # 乘法器不在这里处理，改在 MUL_Commit downstream 中直接写 ROB
-        
-        # 如果 lsu_req 这个周期没有，寄存器里面可能有
-        # Record 不能 select，手动 bundle 然后每个元素都 select
-        lsu_cbd_reg_view = LSU_CBD_signal.view(lsu_cbd_reg[0])
-        alu_cbd_reg_view = [ALU_CBD_signal.view(reg[0]) for reg in alu_cbd_reg]
-        lsu_cbd = LSU_CBD_signal.bundle(
-            ROB_idx = lsu_req.valid.select(lsu_req.ROB_idx, lsu_cbd_reg_view.ROB_idx),
-            rd_data = lsu_req.valid.select(lsu_req.rd_data, lsu_cbd_reg_view.rd_data),
-            valid = lsu_req.valid.select(lsu_req.valid, lsu_cbd_reg_view.valid),
-            is_load = lsu_req.valid.select(lsu_req.is_load, lsu_cbd_reg_view.is_load),
-            is_store = lsu_req.valid.select(lsu_req.is_store, lsu_cbd_reg_view.is_store),
-            store_addr = lsu_req.valid.select(lsu_req.store_addr, lsu_cbd_reg_view.store_addr),
-            store_data = lsu_req.valid.select(lsu_req.store_data, lsu_cbd_reg_view.store_data),
-        )
-        # alu_cbd = alu_req.valid.select(alu_req, alu_cbd_reg[0])
-        alu_cbd = [ALU_CBD_signal.bundle(
-            ROB_idx = alu_req[i].valid.select(alu_req[i].ROB_idx, alu_cbd_reg_view[i].ROB_idx),
-            rd_data = alu_req[i].valid.select(alu_req[i].rd_data, alu_cbd_reg_view[i].rd_data),
-            valid = alu_req[i].valid.select(alu_req[i].valid, alu_cbd_reg_view[i].valid),
-            is_branch = alu_req[i].valid.select(alu_req[i].is_branch, alu_cbd_reg_view[i].is_branch),
-            next_pc = alu_req[i].valid.select(alu_req[i].next_pc, alu_cbd_reg_view[i].next_pc),
-            is_jalr = alu_req[i].valid.select(alu_req[i].is_jalr, alu_cbd_reg_view[i].is_jalr),
-            is_jal = alu_req[i].valid.select(alu_req[i].is_jal, alu_cbd_reg_view[i].is_jal),
-            is_B = alu_req[i].valid.select(alu_req[i].is_B, alu_cbd_reg_view[i].is_B),
-            branch_taken = alu_req[i].valid.select(alu_req[i].branch_taken, alu_cbd_reg_view[i].branch_taken),
-        ) for i in range(RS_ENTRY_NUM)]
-        
-        # 乘法器改在 MUL_Commit downstream 中直接写 ROB，不经过 CDB arbitrator
-        
-        # 直接使用包好的默认值，不再逐字段 optional
-        lsu_valid = lsu_cbd.valid
-        lsu_rob_idx = lsu_cbd.ROB_idx
-        lsu_rd_data = lsu_cbd.rd_data
-        lsu_is_store = lsu_cbd.is_store
-        lsu_store_addr = lsu_cbd.store_addr
-        lsu_store_data = lsu_cbd.store_data
-
-        alu_valid = [alu_cbd[i].valid for i in range(RS_ENTRY_NUM)]
-        alu_rob_idx = [alu_cbd[i].ROB_idx for i in range(RS_ENTRY_NUM)]
-        alu_rd_data = [alu_cbd[i].rd_data for i in range(RS_ENTRY_NUM)]
-        alu_is_branch = [alu_cbd[i].is_branch for i in range(RS_ENTRY_NUM)]
-        alu_next_pc = [alu_cbd[i].next_pc for i in range(RS_ENTRY_NUM)]
-        alu_is_jalr = [alu_cbd[i].is_jalr for i in range(RS_ENTRY_NUM)]
-        alu_is_jal = [alu_cbd[i].is_jal for i in range(RS_ENTRY_NUM)]
-        alu_is_B = [alu_cbd[i].is_B for i in range(RS_ENTRY_NUM)]
-        alu_branch_taken = [alu_cbd[i].branch_taken for i in range(RS_ENTRY_NUM)]
-        empty_lsu_cbd = LSU_CBD_signal.bundle(
-            ROB_idx = UInt(ROB_IDX_WIDTH)(0),
-            rd_data = UInt(32)(0),
-            valid = Bits(1)(0),
-            is_load = Bits(1)(0),
-            is_store = Bits(1)(0),
-            store_addr = UInt(32)(0),
-            store_data = UInt(32)(0),
-        ).value()
-        empty_alu_cbd = ALU_CBD_signal.bundle(
-            ROB_idx = UInt(ROB_IDX_WIDTH)(0),
-            rd_data = UInt(32)(0),
-            valid = Bits(1)(0),
-            is_branch = Bits(1)(0),
-            next_pc = UInt(32)(0),
-            is_jalr = Bits(1)(0),
-            is_jal = Bits(1)(0),
-            is_B = Bits(1)(0),
-            branch_taken = Bits(1)(0),
-        ).value()
-
-        valid = lsu_valid
-        for i in range(RS_ENTRY_NUM):
-            valid = valid | alu_valid[i]
-        # 优先级：LSU(0) > ALU0(1) > ALU1(2) > ...
-        # select_CDB: 0=LSU, 1+=ALU[i]
-        ALU_SELECT_BASE = 1
-        select_CDB = Bits(RS_NUM_WIDTH)(RS_MAX) # 无效值
-        select_CDB = lsu_valid.select(Bits(RS_NUM_WIDTH)(0), select_CDB)
-        for i in range(RS_ENTRY_NUM):
-            # 如果还没有被选择，则选择当前的 ALU
-            select_CDB = (alu_valid[i] & (select_CDB == Bits(RS_NUM_WIDTH)(RS_MAX))).select(Bits(RS_NUM_WIDTH)(ALU_SELECT_BASE + i), select_CDB)
-
-        # 选择 ROB_idx
-        ROB_idx = lsu_valid.select(lsu_rob_idx, UInt(ROB_IDX_WIDTH)(0))
-        for i in range(RS_ENTRY_NUM):
-            ROB_idx = (alu_valid[i] & (select_CDB == Bits(RS_NUM_WIDTH)(ALU_SELECT_BASE + i))).select(alu_rob_idx[i], ROB_idx)
-        
-        # 选择 rd_data
-        rd_data = lsu_valid.select(lsu_rd_data, UInt(32)(0))
-        for i in range(RS_ENTRY_NUM):
-            rd_data = (alu_valid[i] & (select_CDB == Bits(RS_NUM_WIDTH)(ALU_SELECT_BASE + i))).select(alu_rd_data[i], rd_data)
-        log("CDB arb: LSU_valid={} select_CDB={} sel_rob_idx={} rd_data=0x{:08x}", lsu_valid, select_CDB, ROB_idx, rd_data)
-        # 将选择的结果修改进 ROB
-        with Condition(valid):
-            rob._write_ready(ROB_idx, Bits(1)(1))
-            rob.value[ROB_idx] <= rd_data
-            # 若为 store，记录地址与数据（is_store 在 issue 时写入）
-            with Condition(lsu_valid & lsu_is_store):
-                rob.store_addr[ROB_idx] <= lsu_store_addr
-                rob.store_data[ROB_idx] <= lsu_store_data
-        # 计算下一个周期的缓冲寄存器值，最后只写一次，避免单写口冲突
-        lsu_cbd_next = lsu_cbd_reg[0]
-        lsu_hold_req = lsu_req.valid & (select_CDB != Bits(RS_NUM_WIDTH)(0))
-        lsu_clear_after_broadcast = lsu_valid & (~lsu_req.valid) & (select_CDB == Bits(RS_NUM_WIDTH)(0))
-        lsu_cbd_next = lsu_hold_req.select(lsu_req.value(), lsu_cbd_next)
-        lsu_cbd_next = lsu_clear_after_broadcast.select(empty_lsu_cbd, lsu_cbd_next)
-
-        alu_cbd_next = []
-        for i in range(RS_ENTRY_NUM):
-            next_val = alu_cbd_reg[i][0]
-            alu_hold_req = alu_req[i].valid & (select_CDB != Bits(RS_NUM_WIDTH)(ALU_SELECT_BASE + i))
-            alu_clear_after_broadcast = alu_valid[i] & (~alu_req[i].valid) & (select_CDB == Bits(RS_NUM_WIDTH)(ALU_SELECT_BASE + i))
-            next_val = alu_hold_req.select(alu_req[i].value(), next_val)
-            next_val = alu_clear_after_broadcast.select(empty_alu_cbd, next_val)
-            alu_cbd_next.append(next_val)
+        # LSU 广播信号
+        lsu_broadcast = (lsu_rob_idx, lsu_rd_data, lsu_valid)
         
         # ========== 分支控制信号生成 ==========
-        # 提取被选中的分支信息（只有 ALU 会产生分支）
-        sel_is_branch = Bits(1)(0)
-        sel_is_jalr = Bits(1)(0)
-        sel_is_jal = Bits(1)(0)
-        sel_is_B = Bits(1)(0)
-        sel_branch_taken = Bits(1)(0)
-        sel_next_pc = UInt(32)(0)
-        sel_rob_idx_for_branch = UInt(ROB_IDX_WIDTH)(0)
+        # 获取 ROB 中的预测信息
+        predicted_taken = rob._read_predicted_taken(branch_rob_idx)
+        predicted_pc = rob.predicted_pc[branch_rob_idx]
+        branch_pc = rob.pc[branch_rob_idx]
         
-        for i in range(RS_ENTRY_NUM):
-            is_selected = alu_valid[i] & (select_CDB == Bits(RS_NUM_WIDTH)(ALU_SELECT_BASE + i))
-            sel_is_branch = is_selected.select(alu_is_branch[i], sel_is_branch)
-            sel_is_jalr = is_selected.select(alu_is_jalr[i], sel_is_jalr)
-            sel_is_jal = is_selected.select(alu_is_jal[i], sel_is_jal)
-            sel_is_B = is_selected.select(alu_is_B[i], sel_is_B)
-            sel_branch_taken = is_selected.select(alu_branch_taken[i], sel_branch_taken)
-            sel_next_pc = is_selected.select(alu_next_pc[i], sel_next_pc)
-            sel_rob_idx_for_branch = is_selected.select(alu_rob_idx[i], sel_rob_idx_for_branch)
-        
-        # 分支验证：检查 ROB 中记录的预测是否正确
-        # 预测信息存储在 ROB 中：predicted_taken, predicted_pc
-        predicted_taken = rob._read_predicted_taken(sel_rob_idx_for_branch)
-        predicted_pc = rob.predicted_pc[sel_rob_idx_for_branch]
-        branch_pc = rob.pc[sel_rob_idx_for_branch]  # 分支指令的 PC，用于更新 BHT
-        
-        # 对于 B 指令：
-        #   - 预测 taken 但实际 not taken → 预测错误
-        #   - 预测 not taken 但实际 taken → 预测错误（新增！）
-        # 对于 JAL：
-        #   - 总是预测跳转，不会出错
-        # 对于 JALR：
-        #   - 不预测，没有 misprediction，只需要传递 jalr_resolved
-        
-        # B 指令预测错误：预测与实际不一致
-        b_mispredicted_taken = sel_is_B & predicted_taken & (~sel_branch_taken)  # 预测跳转但没跳
-        b_mispredicted_not_taken = sel_is_B & (~predicted_taken) & sel_branch_taken  # 预测不跳转但跳了
+        # B 指令预测错误检测
+        b_mispredicted_taken = branch_is_B & predicted_taken & (~branch_taken)
+        b_mispredicted_not_taken = branch_is_B & (~predicted_taken) & branch_taken
         b_mispredicted = b_mispredicted_taken | b_mispredicted_not_taken
         
         # JALR 完成信号
-        jalr_resolved = sel_is_branch & sel_is_jalr
-        jalr_target_pc = sel_next_pc
+        jalr_resolved = any_branch & branch_is_jalr
+        jalr_target_pc = branch_next_pc
         
         # 预测错误信号
-        mispredicted = sel_is_branch & b_mispredicted
-        # 正确的 PC：ALU 计算的 next_pc
-        correct_pc = sel_next_pc
-
-        # Flush 时直接将缓冲寄存器置零（优先级最高）
-        lsu_cbd_next = mispredicted.select(empty_lsu_cbd, lsu_cbd_next)
-        alu_cbd_next = [mispredicted.select(empty_alu_cbd, alu_cbd_next[i]) for i in range(RS_ENTRY_NUM)]
+        mispredicted = any_branch & b_mispredicted
+        correct_pc = branch_next_pc
         
-        # ========== 更新 BHT ==========
-        # 只有 B 类型条件分支需要更新 BHT
-        bht.update_if(sel_is_B, branch_pc, sel_branch_taken)
+        # 更新 BHT（只有 B 类型条件分支）
+        bht.update_if(branch_is_B & any_branch, branch_pc, branch_taken)
         
-        log("CDB branch: is_branch={} is_B={} branch_taken={} predicted={} mispred={} pc=0x{:08x}", 
-            sel_is_branch, sel_is_B, sel_branch_taken, predicted_taken, mispredicted, branch_pc)
+        log("CDB branch: any={} is_B={} taken={} predicted={} mispred={}", 
+            any_branch, branch_is_B, branch_taken, predicted_taken, mispredicted)
         
-        # ========== Flush 时清空缓冲寄存器 ==========
-        # 当检测到分支预测错误时，清空 CDB 缓冲寄存器，防止旧指令的结果被错误广播
-        with Condition(mispredicted):
-            log("CDB arb: MISPREDICTION - clearing buffer registers")
-
-        # 写回缓冲寄存器（单写口，每周期仅一次）
-        lsu_cbd_reg[0] <= lsu_cbd_next
-        for i in range(RS_ENTRY_NUM):
-            alu_cbd_reg[i][0] <= alu_cbd_next[i]
-        
-        # 返回：CBD_signal 和 分支控制信号
-        return CBD_signal.bundle(
-            ROB_idx = ROB_idx,
-            rd_data = rd_data,
-            valid = valid,
-        ), BranchControl_signal.bundle(
+        branch_ctrl = BranchControl_signal.bundle(
             jalr_resolved = jalr_resolved,
             jalr_target_pc = jalr_target_pc,
             mispredicted = mispredicted,
             correct_pc = correct_pc,
         )
+        
+        # 为了兼容性，构建一个合并的 CBD_signal（用于 Issue 旁路）
+        any_valid = lsu_valid
+        sel_rob_idx = lsu_rob_idx
+        sel_rd_data = lsu_rd_data
+        
+        for (rob_idx, rd_data, valid) in alu_broadcasts:
+            any_valid = any_valid | valid
+            sel_rob_idx = valid.select(rob_idx, sel_rob_idx)
+            sel_rd_data = valid.select(rd_data, sel_rd_data)
+        
+        cbd_signal = CBD_signal.bundle(
+            ROB_idx = sel_rob_idx,
+            rd_data = sel_rd_data,
+            valid = any_valid,
+        )
+        
+        return cbd_signal, branch_ctrl, alu_broadcasts, lsu_broadcast

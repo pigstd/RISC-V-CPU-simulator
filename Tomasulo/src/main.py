@@ -554,11 +554,11 @@ def build_CPU(depth_log=18, data_base=0x2000):
         rs_downstream = [RS_downstream() for _ in range(RS_ENTRY_NUM)]
         alu = [ALU() for _ in range(RS_ENTRY_NUM)]
         
-        # 乘法器及其保留站（2个 RS entry）
+        # 乘法器及其保留站（2个 RS entry，每个 RS 有独立乘法器）
         mul_rs = [MUL_RSEntry() for _ in range(MUL_RS_NUM)]
         mul_rs_downstream = [MUL_RS_downstream(rs_idx=i) for i in range(MUL_RS_NUM)]
-        mul_regs = MultiplierRegs()  # 共享寄存器
-        multiplier_state = MultiplierState()
+        mul_regs = [MultiplierRegs() for _ in range(MUL_RS_NUM)]  # 每个 RS 独立乘法器
+        multiplier_state = [MultiplierState() for _ in range(MUL_RS_NUM)]  # 每个乘法器的状态机
         
         rob = ROB()
         lsq = LSQEntry()
@@ -589,22 +589,27 @@ def build_CPU(depth_log=18, data_base=0x2000):
             committer=committer,
         )
         
-        # 乘法器状态机（每周期执行，处理倒计时和 ROB 写入）
-        mul_rob_idx, mul_rd_data, mul_is_done = multiplier_state.build(
-            mul_regs=mul_regs,
-            rob=rob,
-            metadata=metadata,
-        )
+        # 乘法器状态机（每个 RS 有独立乘法器）
+        mul_broadcasts = []  # 收集所有乘法器的广播信号
+        for i in range(MUL_RS_NUM):
+            mul_rob_idx, mul_rd_data, mul_is_done = multiplier_state[i].build(
+                mul_regs=mul_regs[i],
+                rob=rob,
+                metadata=metadata,
+            )
+            mul_broadcasts.append((mul_rob_idx, mul_rd_data, mul_is_done))
         
-        # CDB Arbitrator 现在返回 CBD_signal 和 BranchControl_signal
-        # 同时负责更新 BHT（乘法器不经过 CDB，在单独的 downstream 处理）
-        cbd_signal, branch_ctrl = cdb_arbitrator.build(
+        # CDB Arbitrator - 无仲裁，返回所有广播信号
+        cbd_signal, branch_ctrl, alu_broadcasts, lsu_broadcast = cdb_arbitrator.build(
             LSU_CBD_req=lsu_cbd_signal,
             ALU_CBD_req=alu_cbd_signal_list,
             rob=rob,
             bht=bht,  # 传入 BHT 用于更新
             metadata=metadata,
         )
+        
+        # 构建所有广播信号列表：4 个 ALU + 1 个 LSU + 2 个乘法器 = 7 条
+        all_broadcasts = list(alu_broadcasts) + [lsu_broadcast] + mul_broadcasts
         
         issue_pc_addr, instr, re = issuer.build(icache=icache)
         
@@ -640,10 +645,10 @@ def build_CPU(depth_log=18, data_base=0x2000):
             metadata=metadata,
         )
         
-        # LSQ downstream
+        # LSQ downstream - 监听所有广播线
         lsq_re, read_addr = lsq_downstream.build(
             lsq=lsq,
-            cbd_signal=cbd_signal,
+            all_broadcasts=all_broadcasts,  # 所有广播信号
             lsu=lsu,
             rob=rob,
             regs=regs,
@@ -651,25 +656,22 @@ def build_CPU(depth_log=18, data_base=0x2000):
             metadata=metadata,
         )
         
-        # RS downstreams
+        # RS downstreams - 监听所有 7 条广播线
         for i in range(RS_ENTRY_NUM):
             rs_downstream[i].build(
                 rs=rs[i],
                 alu=alu[i],
-                cbd_signal=cbd_signal,
-                mul_broadcast=(mul_rob_idx, mul_rd_data, mul_is_done),
+                all_broadcasts=all_broadcasts,  # 所有广播信号
                 issue_stall=do_stall,
                 metadata=metadata,
             )
         
-        # MUL_RS downstream - 监听 CDB 更新操作数
-        # 传递 mul 信号用于 RS 更新（当乘法完成时，其他等待该结果的 RS 需要更新）
+        # MUL_RS downstream - 每个 RS 有独立乘法器，监听所有广播线
         for i in range(MUL_RS_NUM):
             mul_rs_downstream[i].build(
                 rs=mul_rs[i],
-                mul_regs=mul_regs,  # 乘法器共享寄存器
-                cbd_signal=cbd_signal,
-                mul_broadcast=(mul_rob_idx, mul_rd_data, mul_is_done),
+                mul_regs=mul_regs[i],  # 这个 RS 专属的乘法器
+                all_broadcasts=all_broadcasts,  # 所有广播信号
                 metadata=metadata,
             )
 

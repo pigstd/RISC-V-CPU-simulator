@@ -166,7 +166,7 @@ class MUL_RSEntry:
 
 
 class MUL_RS_downstream(Downstream):
-    """乘法保留站的 downstream 逻辑"""
+    """乘法保留站的 downstream 逻辑 - 每个 RS 有独立的乘法器"""
     
     def __init__(self, rs_idx=0):
         super().__init__()
@@ -175,69 +175,51 @@ class MUL_RS_downstream(Downstream):
     @downstream.combinational
     def build(self,
               rs: MUL_RSEntry,
-              mul_regs: MultiplierRegs,  # 乘法器的共享寄存器
-              cbd_signal,  # CDB 广播信号
-              mul_broadcast,  # 乘法器完成广播 (rob_idx, rd_data, is_done)
+              mul_regs: MultiplierRegs,  # 这个 RS 专属的乘法器寄存器
+              all_broadcasts: list,  # 所有广播信号列表 [(rob_idx, rd_data, is_done), ...]
               metadata):  # 用于驱动 downstream 的元数据
         """
-        监听 CDB 更新操作数，就绪时将请求写入乘法器寄存器
+        监听所有广播更新操作数，就绪时将请求写入乘法器寄存器
+        
+        all_broadcasts: 包含所有执行单元的广播信号
+          - alu_broadcasts: 4 个 ALU 的广播 (rob_idx, rd_data, valid)
+          - lsu_broadcast: LSU 的广播 (rob_idx, rd_data, valid)
+          - mul_broadcasts: 2 个乘法器的广播 (rob_idx, rd_data, is_done)
         """
-        from .arbitrator import CBD_signal
         
         metadata = metadata.optional(default=UInt(8)(0))
         _ = metadata == metadata  # 确保每周期触发
         
-        # 解包乘法器广播信号，使用 optional 防止无效值
-        mul_rob_idx, mul_rd_data, mul_is_done = mul_broadcast
-        mul_rob_idx = mul_rob_idx.optional(default=UInt(ROB_IDX_WIDTH)(0))
-        mul_rd_data = mul_rd_data.optional(default=UInt(32)(0))
-        mul_is_done = mul_is_done.optional(default=Bits(1)(0))
-        
-        # 获取 CDB 信号
-        cbd_payload = cbd_signal.value()
-        cbd = CBD_signal.view(cbd_payload)
-        cbd_valid = cbd.valid
-        cbd_rob_idx = cbd.ROB_idx
-        cbd_rd_data = cbd.rd_data
-        
         # 检查乘法器是否空闲
         mul_idle = (mul_regs.cycle_cnt[0] == UInt(4)(0)) & (~mul_regs.pending[0])
         
-        log("MUL_RS downstream: busy={} qj_v={} qk_v={} rob_idx={} fired={} cbd_valid={} cbd_rob={} mul_done={} mul_idle={}",
-            rs.busy[0], rs.qj_valid[0], rs.qk_valid[0], rs.rob_idx[0], rs.fired[0], cbd_valid, cbd_rob_idx, mul_is_done, mul_idle)
+        log("MUL_RS downstream: busy={} qj_v={} qk_v={} rob_idx={} fired={} mul_idle={}",
+            rs.busy[0], rs.qj_valid[0], rs.qk_valid[0], rs.rob_idx[0], rs.fired[0], mul_idle)
         
-        # 监听 CDB 广播，更新操作数
         busy_flag = rs.busy[0]
-        with Condition(busy_flag & cbd_valid):
-            # 检查 qj 是否在等待这个 ROB 条目
-            qj_match = (~rs.qj_valid[0]) & (rs.qj[0] == cbd_rob_idx)
-            with Condition(qj_match):
-                rs.qj_valid[0] <= Bits(1)(1)
-                rs.vj[0] <= cbd_rd_data
-                log("MUL_RS: update qj from CDB, rob={} data=0x{:08x}", cbd_rob_idx, cbd_rd_data)
-            
-            # 检查 qk 是否在等待这个 ROB 条目
-            qk_match = (~rs.qk_valid[0]) & (rs.qk[0] == cbd_rob_idx)
-            with Condition(qk_match):
-                rs.qk_valid[0] <= Bits(1)(1)
-                rs.vk[0] <= cbd_rd_data
-                log("MUL_RS: update qk from CDB, rob={} data=0x{:08x}", cbd_rob_idx, cbd_rd_data)
         
-        # 监听乘法器完成广播，更新操作数（类似 CDB 广播）
-        with Condition(busy_flag & mul_is_done):
-            # 检查 qj 是否在等待乘法器的结果
-            mul_qj_match = (~rs.qj_valid[0]) & (rs.qj[0] == mul_rob_idx)
-            with Condition(mul_qj_match):
-                rs.qj_valid[0] <= Bits(1)(1)
-                rs.vj[0] <= mul_rd_data
-                log("MUL_RS: update qj from MUL, rob={} data=0x{:08x}", mul_rob_idx, mul_rd_data)
+        # 监听所有广播信号，更新操作数
+        for bcast_idx, (bcast_rob_idx, bcast_rd_data, bcast_valid) in enumerate(all_broadcasts):
+            bcast_rob_idx = bcast_rob_idx.optional(default=UInt(ROB_IDX_WIDTH)(0))
+            bcast_rd_data = bcast_rd_data.optional(default=UInt(32)(0))
+            bcast_valid = bcast_valid.optional(default=Bits(1)(0))
             
-            # 检查 qk 是否在等待乘法器的结果
-            mul_qk_match = (~rs.qk_valid[0]) & (rs.qk[0] == mul_rob_idx)
-            with Condition(mul_qk_match):
-                rs.qk_valid[0] <= Bits(1)(1)
-                rs.vk[0] <= mul_rd_data
-                log("MUL_RS: update qk from MUL, rob={} data=0x{:08x}", mul_rob_idx, mul_rd_data)
+            with Condition(busy_flag & bcast_valid):
+                # 检查 qj 是否在等待这个 ROB 条目
+                qj_match = (~rs.qj_valid[0]) & (rs.qj[0] == bcast_rob_idx)
+                with Condition(qj_match):
+                    rs.qj_valid[0] <= Bits(1)(1)
+                    rs.vj[0] <= bcast_rd_data
+                    log("MUL_RS: update qj from bcast, rob={} data=0x{:08x}", 
+                        bcast_rob_idx, bcast_rd_data)
+                
+                # 检查 qk 是否在等待这个 ROB 条目
+                qk_match = (~rs.qk_valid[0]) & (rs.qk[0] == bcast_rob_idx)
+                with Condition(qk_match):
+                    rs.qk_valid[0] <= Bits(1)(1)
+                    rs.vk[0] <= bcast_rd_data
+                    log("MUL_RS: update qk from bcast, rob={} data=0x{:08x}",
+                        bcast_rob_idx, bcast_rd_data)
         
         # 就绪时发射（通过设置乘法器寄存器的 pending 标志）
         ready = (busy_flag == Bits(1)(1)) & rs.qj_valid[0] & rs.qk_valid[0] & ~rs.fired[0] & mul_idle
@@ -248,15 +230,18 @@ class MUL_RS_downstream(Downstream):
             mul_regs.op1[0] <= rs.vj[0]
             mul_regs.op2[0] <= rs.vk[0]
             mul_regs.alu_type[0] <= rs.op[0]
-            mul_regs.rob_idx[0] <= rs.rob_idx[0].bitcast(UInt(ROB_IDX_WIDTH))  # 转换类型
-            mul_regs.pending[0] <= Bits(1)(1)  # 标记有待处理的请求
+            mul_regs.rob_idx[0] <= rs.rob_idx[0].bitcast(UInt(ROB_IDX_WIDTH))
+            mul_regs.pending[0] <= Bits(1)(1)
             rs.fired[0] <= Bits(1)(1)
         
-        # 乘法完成时清除 MUL_RS（如果当前 RS 的 ROB idx 匹配）
-        rs_matches_done = busy_flag & mul_is_done & (rs.rob_idx[0] == mul_rob_idx)
+        # 本乘法器完成时清除 MUL_RS
+        # 使用这个 RS 专属乘法器的完成信号
+        my_mul_done = (mul_regs.cycle_cnt[0] == UInt(4)(1))
+        my_mul_rob_idx = mul_regs.rob_idx[0]
+        rs_matches_done = busy_flag & my_mul_done & (rs.rob_idx[0] == my_mul_rob_idx)
         with Condition(rs_matches_done):
             rs.busy[0] <= Bits(1)(0)
             rs.fired[0] <= Bits(1)(0)
             rs.qj_valid[0] <= Bits(1)(0)
             rs.qk_valid[0] <= Bits(1)(0)
-            log("MUL_RS: cleared after mul done, rob_idx={}", mul_rob_idx)
+            log("MUL_RS: cleared after mul done, rob_idx={}", my_mul_rob_idx)
