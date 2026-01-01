@@ -1,5 +1,5 @@
 {
-  "name": "vector_mul_100",
+  "name": "simple_mul",
   "memory": {
     "text_base": 0,
     "data_base": 8192

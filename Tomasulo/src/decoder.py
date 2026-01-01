@@ -24,30 +24,34 @@ def decoder_logic(inst, reg_pending: Union[RegArray, 'RAT'], regs: RegArray
     [is_B, B_rs1, B_rs2, B_imm, B_alu] = decoder_B_type(inst=inst, is_eq=is_eq)
     [is_U, U_imm, U_rd] = decoder_U_type(inst=inst, is_eq=is_eq)
     [is_J, J_imm, J_rd] = decoder_J_type(inst=inst, is_eq=is_eq)
+    [is_M, M_rs1, M_rs2, M_rd, M_alu] = decoder_M_type(inst=inst, is_eq=is_eq)
 
     # 接下来信息整合
     ecall = is_eq.get("ecall", Bits(1)(0))
     ebreak = is_eq.get("ebreak", Bits(1)(0))
 
-    rs1_used = is_R | is_I | is_I_star | is_S | is_B
+    rs1_used = is_R | is_I | is_I_star | is_S | is_B | is_M
     rs1 = is_R.select(R_rs1,
             is_I.select(I_rs1,
             is_I_star.select(I_star_rs1,
             is_S.select(S_rs1,
-            is_B.select(B_rs1, Bits(5)(0))))))
+            is_B.select(B_rs1,
+            is_M.select(M_rs1, Bits(5)(0)))))))
 
-    rs2_used = is_R | is_S | is_B
+    rs2_used = is_R | is_S | is_B | is_M
     rs2 = is_R.select(R_rs2,
             is_S.select(S_rs2,
-            is_B.select(B_rs2, Bits(5)(0))))
+            is_B.select(B_rs2,
+            is_M.select(M_rs2, Bits(5)(0)))))
 
     is_I_writes = is_I & ~(ecall | ebreak)
-    rd_used = is_R | is_I_writes | is_I_star | is_U | is_J
+    rd_used = is_R | is_I_writes | is_I_star | is_U | is_J | is_M
     rd = is_R.select(R_rd,
          is_I_writes.select(I_rd,
          is_I_star.select(I_star_rd,
          is_U.select(U_rd,
-         is_J.select(J_rd, Bits(5)(0))))))
+         is_J.select(J_rd,
+         is_M.select(M_rd, Bits(5)(0)))))))
 
     imm_used = is_I | is_I_star | is_S | is_B | is_U | is_J
     imm_zero = Bits(32)(0)
@@ -100,13 +104,14 @@ def decoder_logic(inst, reg_pending: Union[RegArray, 'RAT'], regs: RegArray
     is_lui = is_eq.get("lui", Bits(1)(0))
     is_auipc = is_eq.get("auipc", Bits(1)(0))
 
-    # ALU 类型：优先 R > I > I* > B
-    alu_type = is_R.select(R_alu,
+    # ALU 类型：优先 M > R > I > I* > B
+    alu_type = is_M.select(M_alu,
+               is_R.select(R_alu,
                is_I.select(I_alu,
                is_I_star.select(I_star_alu,
                is_B.select(B_alu,
                is_U.select(Bits(RV32I_ALU.CNT)(1 << RV32I_ALU.ALU_ADD),
-                           Bits(RV32I_ALU.CNT)(1 << RV32I_ALU.ALU_NONE))))))
+                           Bits(RV32I_ALU.CNT)(1 << RV32I_ALU.ALU_NONE)))))))
     # reg_pending 存储 rob_idx+1，0 表示无依赖；避免 0-1 下溢为 0xff 造成数组越界
     rs1_pending = reg_pending[rs1]
     rs2_pending = reg_pending[rs2]
@@ -170,7 +175,7 @@ def decoder_logic(inst, reg_pending: Union[RegArray, 'RAT'], regs: RegArray
     # log("decoder: rd_used = {} , rd = {}", rd_used, rd)
     # log("decoder: imm_used = {} , imm = {}", imm_used, imm)
     # log("decoder: mem_read = {} , mem_write = {} , is_branch = {} , branch_type = {}", mem_read, mem_write, is_branch, branch_type)
-    log("decoder: alu_type(onehot)={:014b}", alu_type)
+    log("decoder: alu_type(onehot)={:019b} is_mul={}", alu_type, is_M)
 
     return deocder_signals.bundle(
         rs1=rs1,
@@ -199,4 +204,5 @@ def decoder_logic(inst, reg_pending: Union[RegArray, 'RAT'], regs: RegArray
         is_valid=is_valid,
         is_predictable_branch=is_predictable_branch,
         is_B=is_B,  # 条件分支 B 类型指令
+        is_mul=is_M,  # M 扩展乘法指令
     )

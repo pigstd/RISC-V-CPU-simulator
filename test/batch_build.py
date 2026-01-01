@@ -18,8 +18,15 @@ TEXT_ADDR = "0x00000000"
 DATA_ADDR = "0x00002000"
 
 # 模拟器默认参数
-DEFAULT_SIM_THRESHOLD = 10000
-DEFAULT_IDLE_THRESHOLD = 5000
+DEFAULT_SIM_THRESHOLD = 100000
+DEFAULT_IDLE_THRESHOLD = 50000
+
+# 需要 M 扩展（乘法指令）的测试用例
+# 这些测试会使用 -march=rv32im 编译
+M_EXTENSION_TESTS = [
+    "simple_mul",
+    "vector_mul_real",
+]
 # ===========================================
 
 def run_cmd(cmd, cwd=None):
@@ -95,8 +102,14 @@ def generate_riscv_files(c_path, case_dir, case_name):
     linker = os.path.abspath("common/linker.ld")
     start_s = os.path.abspath("common/start.s")
     
+    # 根据测试用例选择架构：M 扩展测试使用 rv32im，其他使用 rv32i
+    if case_name in M_EXTENSION_TESTS:
+        march = "rv32im"
+    else:
+        march = "rv32i"
+    
     # 1. 编译 RISC-V ELF
-    run_cmd(f"{RV_PREFIX}gcc -march=rv32i -mabi=ilp32 -O0 -nostdlib -T {linker} {start_s} {c_path} -o {elf_file}")
+    run_cmd(f"{RV_PREFIX}gcc -march={march} -mabi=ilp32 -O0 -nostdlib -T {linker} {start_s} {c_path} -o {elf_file}")
     
     # 2. 反汇编 (可选，用于调试)
     run_cmd(f"{RV_PREFIX}objdump -d {elf_file} > {os.path.join(case_dir, case_name + '.asm')}")

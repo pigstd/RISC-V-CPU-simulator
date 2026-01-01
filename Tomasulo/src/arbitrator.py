@@ -25,6 +25,7 @@ class CDB_Arbitrator(Downstream):
         super().__init__()
     @downstream.combinational
     def build(self, LSU_CBD_req: Value, ALU_CBD_req: list[Value], rob : ROB, bht: BHT, metadata : Value):
+        # 乘法器不经过 CDB arbitrator，直接在 MUL_Commit downstream 中处理
         lsu_cbd_reg = RegArray(Bits(LSU_CBD_signal.bits), 1, initializer=[0])
         alu_cbd_reg = [RegArray(Bits(ALU_CBD_signal.bits), 1, initializer=[0]) for _ in range(RS_ENTRY_NUM)]
         # metadata 仅用于驱动 downstream，每周期都会访问一次
@@ -57,17 +58,11 @@ class CDB_Arbitrator(Downstream):
                 branch_taken = Bits(1)(0),
             ).value())
             alu_req.append(ALU_CBD_signal.view(alu_payload))
-        # alu_payload = ALU_CBD_req.value().optional(default=ALU_CBD_signal.bundle(
-        #     ROB_idx = UInt(4)(0),
-        #     rd_data = UInt(32)(0),
-        #     valid = Bits(1)(0),
-        #     is_branch = Bits(1)(0),
-        #     next_pc = UInt(32)(0),
-        # ).value())
-        # alu_req = ALU_CBD_signal.view(alu_payload)
+        
+        # 乘法器不在这里处理，改在 MUL_Commit downstream 中直接写 ROB
+        
         # 如果 lsu_req 这个周期没有，寄存器里面可能有
         # Record 不能 select，手动 bundle 然后每个元素都 select
-        # lsu_cbd = lsu_req.valid.select(lsu_req, lsu_cbd_reg[0])
         lsu_cbd_reg_view = LSU_CBD_signal.view(lsu_cbd_reg[0])
         alu_cbd_reg_view = [ALU_CBD_signal.view(reg[0]) for reg in alu_cbd_reg]
         lsu_cbd = LSU_CBD_signal.bundle(
@@ -91,6 +86,9 @@ class CDB_Arbitrator(Downstream):
             is_B = alu_req[i].valid.select(alu_req[i].is_B, alu_cbd_reg_view[i].is_B),
             branch_taken = alu_req[i].valid.select(alu_req[i].branch_taken, alu_cbd_reg_view[i].branch_taken),
         ) for i in range(RS_ENTRY_NUM)]
+        
+        # 乘法器改在 MUL_Commit downstream 中直接写 ROB，不经过 CDB arbitrator
+        
         # 直接使用包好的默认值，不再逐字段 optional
         lsu_valid = lsu_cbd.valid
         lsu_rob_idx = lsu_cbd.ROB_idx
@@ -112,19 +110,24 @@ class CDB_Arbitrator(Downstream):
         valid = lsu_valid
         for i in range(RS_ENTRY_NUM):
             valid = valid | alu_valid[i]
-        # 优先级：LSU > ALU0 > ALU1 > ...
+        # 优先级：LSU(0) > ALU0(1) > ALU1(2) > ...
+        # select_CDB: 0=LSU, 1+=ALU[i]
+        ALU_SELECT_BASE = 1
         select_CDB = Bits(RS_NUM_WIDTH)(RS_MAX) # 无效值
         select_CDB = lsu_valid.select(Bits(RS_NUM_WIDTH)(0), select_CDB)
         for i in range(RS_ENTRY_NUM):
             # 如果还没有被选择，则选择当前的 ALU
-            select_CDB = (alu_valid[i] & (select_CDB == Bits(RS_NUM_WIDTH)(RS_MAX))).select(Bits(RS_NUM_WIDTH)(i+1), select_CDB)
+            select_CDB = (alu_valid[i] & (select_CDB == Bits(RS_NUM_WIDTH)(RS_MAX))).select(Bits(RS_NUM_WIDTH)(ALU_SELECT_BASE + i), select_CDB)
 
+        # 选择 ROB_idx
         ROB_idx = lsu_valid.select(lsu_rob_idx, UInt(4)(0))
         for i in range(RS_ENTRY_NUM):
-            ROB_idx = (alu_valid[i] & (select_CDB == Bits(RS_NUM_WIDTH)(i+1))).select(alu_rob_idx[i], ROB_idx)
+            ROB_idx = (alu_valid[i] & (select_CDB == Bits(RS_NUM_WIDTH)(ALU_SELECT_BASE + i))).select(alu_rob_idx[i], ROB_idx)
+        
+        # 选择 rd_data
         rd_data = lsu_valid.select(lsu_rd_data, UInt(32)(0))
         for i in range(RS_ENTRY_NUM):
-            rd_data = (alu_valid[i] & (select_CDB == Bits(RS_NUM_WIDTH)(i+1))).select(alu_rd_data[i], rd_data)
+            rd_data = (alu_valid[i] & (select_CDB == Bits(RS_NUM_WIDTH)(ALU_SELECT_BASE + i))).select(alu_rd_data[i], rd_data)
         log("CDB arb: LSU_valid={} select_CDB={} sel_rob_idx={} rd_data=0x{:08x}", lsu_valid, select_CDB, ROB_idx, rd_data)
         # 将选择的结果修改进 ROB
         with Condition(valid):
@@ -139,7 +142,7 @@ class CDB_Arbitrator(Downstream):
         with Condition(lsu_req.valid & (select_CDB != Bits(RS_NUM_WIDTH)(0))):
             lsu_cbd_reg[0] <= lsu_req.value()
         for i in range(RS_ENTRY_NUM):
-            with Condition(alu_req[i].valid & (select_CDB != Bits(RS_NUM_WIDTH)(i + 1))):
+            with Condition(alu_req[i].valid & (select_CDB != Bits(RS_NUM_WIDTH)(ALU_SELECT_BASE + i))):
                 alu_cbd_reg[i][0] <= alu_req[i].value()
         # 如果这个周期是广播的寄存器的 cbd，那么清空寄存器
         with Condition(lsu_valid & (~lsu_req.valid) & (select_CDB == Bits(RS_NUM_WIDTH)(0))):
@@ -153,7 +156,7 @@ class CDB_Arbitrator(Downstream):
                 store_data = UInt(32)(0),
             ).value()
         for i in range(RS_ENTRY_NUM):
-            with Condition(alu_valid[i] & (~alu_req[i].valid) & (select_CDB == Bits(RS_NUM_WIDTH)(i + 1))):
+            with Condition(alu_valid[i] & (~alu_req[i].valid) & (select_CDB == Bits(RS_NUM_WIDTH)(ALU_SELECT_BASE + i))):
                 alu_cbd_reg[i][0] <= ALU_CBD_signal.bundle(
                     ROB_idx = UInt(4)(0),
                     rd_data = UInt(32)(0),
@@ -167,7 +170,7 @@ class CDB_Arbitrator(Downstream):
                 ).value()
         
         # ========== 分支控制信号生成 ==========
-        # 提取被选中的分支信息
+        # 提取被选中的分支信息（只有 ALU 会产生分支）
         sel_is_branch = Bits(1)(0)
         sel_is_jalr = Bits(1)(0)
         sel_is_jal = Bits(1)(0)
@@ -177,7 +180,7 @@ class CDB_Arbitrator(Downstream):
         sel_rob_idx_for_branch = UInt(4)(0)
         
         for i in range(RS_ENTRY_NUM):
-            is_selected = alu_valid[i] & (select_CDB == Bits(RS_NUM_WIDTH)(i+1))
+            is_selected = alu_valid[i] & (select_CDB == Bits(RS_NUM_WIDTH)(ALU_SELECT_BASE + i))
             sel_is_branch = is_selected.select(alu_is_branch[i], sel_is_branch)
             sel_is_jalr = is_selected.select(alu_is_jalr[i], sel_is_jalr)
             sel_is_jal = is_selected.select(alu_is_jal[i], sel_is_jal)

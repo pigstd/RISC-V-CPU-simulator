@@ -17,6 +17,7 @@ from .RS import *
 from .LSQ import *
 from .commit import *
 from .arbitrator import *
+from .multiplier import MultiplierRegs, MultiplierState, MUL_RSEntry, MUL_RS_downstream, MUL_signal, MUL_LATENCY
 
 ROB_MASK = (1 << ROB_IDX_WIDTH) - 1
 
@@ -88,6 +89,7 @@ class IsserImpl(Downstream):
               re: Value,
               rob: ROB,
               rs: list[RSEntry],
+              mul_rs: MUL_RSEntry,  # 乘法保留站
               lsq: LSQEntry,
               rat: RAT,  # 改用新的 RAT 类
               regs: RegArray,
@@ -119,12 +121,18 @@ class IsserImpl(Downstream):
             cbd = cbd,
         )
         is_mem = decoder_result.mem_read | decoder_result.mem_write
+        is_mul = decoder_result.is_mul  # 乘法指令
         rs_busy = rs[0].busy[0]
         for i in range(1, RS_ENTRY_NUM):
             rs_busy = rs_busy & rs[i].busy[0]
+        mul_rs_busy = mul_rs.busy[0]  # 乘法 RS 是否忙碌
         
-        # 资源冲突 stall
-        resource_stall = (rob.is_full() | is_mem.select(lsq.busy[0], rs_busy)) & re
+        # 资源冲突 stall：根据指令类型检查对应的资源
+        # 乘法指令 -> 检查 mul_rs
+        # 内存指令 -> 检查 lsq
+        # 其他 -> 检查 rs
+        target_busy = is_mul.select(mul_rs_busy, is_mem.select(lsq.busy[0], rs_busy))
+        resource_stall = (rob.is_full() | target_busy) & re
         stall = resource_stall
         
         # 分支预测信号：B/JAL 可以预测跳转，JALR 需要 stall
@@ -211,7 +219,8 @@ class IsserImpl(Downstream):
                     lsq.vk[0] <= rs2_val
                     lsq.rs2_id[0] <= decoder_result.rs2
                     lsq.imm[0] <= decoder_result.imm.bitcast(UInt(32))
-                with Condition(~is_mem):
+                with Condition(~is_mem & ~is_mul):
+                    # 非内存、非乘法指令 -> 发送到 ALU RS
                     RS_select = Bits(RS_NUM_WIDTH)(RS_MAX)
                     for i in range(RS_ENTRY_NUM):
                         RS_select = (rs[i].busy[0]).select(RS_select, Bits(RS_NUM_WIDTH)(i))
@@ -252,6 +261,20 @@ class IsserImpl(Downstream):
                             rs[i].is_auipc[0] <= decoder_result.is_auipc
                             rs[i].pc_addr[0] <= pc_addr
                             rs[i].is_syscall[0] <= decoder_result.is_ecall | decoder_result.is_ebreak
+
+                with Condition(is_mul):
+                    # 乘法指令 -> 发送到 MUL_RS
+                    log("issuer -> MUL_RS: rob_idx={} rd={} rs1_dep={} rs2_dep={}", rob_idx, decoder_result.rd, qj, qk)
+                    mul_rs.busy[0] <= Bits(1)(1)
+                    mul_rs.op[0] <= decoder_result.alu_type
+                    mul_rs.vj[0] <= rs1_val
+                    mul_rs.vk[0] <= rs2_val
+                    mul_rs.qj[0] <= qj
+                    mul_rs.qk[0] <= qk
+                    mul_rs.qj_valid[0] <= qj_valid
+                    mul_rs.qk_valid[0] <= qk_valid
+                    mul_rs.rd[0] <= decoder_result.rd
+                    mul_rs.rob_idx[0] <= rob_idx.zext(Bits(4))
 
             stall_pc = pc_addr
         
@@ -456,6 +479,7 @@ class FlushControl(Downstream):
               rat: RAT,
               rob: ROB,
               rs: list[RSEntry],
+              mul_rs: MUL_RSEntry,  # 乘法保留站
               lsq: LSQEntry,
               metadata: Value):
         do_flush = do_flush.optional(default=Bits(1)(0))
@@ -477,7 +501,13 @@ class FlushControl(Downstream):
                 rs[i].qj_valid[0] <= Bits(1)(0)
                 rs[i].qk_valid[0] <= Bits(1)(0)
             
-            # 4. 清空 LSQ
+            # 4. 清空 MUL_RS
+            mul_rs.busy[0] <= Bits(1)(0)
+            mul_rs.fired[0] <= Bits(1)(0)
+            mul_rs.qj_valid[0] <= Bits(1)(0)
+            mul_rs.qk_valid[0] <= Bits(1)(0)
+            
+            # 5. 清空 LSQ
             lsq.busy[0] <= Bits(1)(0)
             lsq.fired[0] <= Bits(1)(0)
             lsq.qj_valid[0] <= Bits(1)(0)
@@ -512,6 +542,13 @@ def build_CPU(depth_log=18, data_base=0x2000):
         rs = [RSEntry() for _ in range(RS_ENTRY_NUM)]
         rs_downstream = [RS_downstream() for _ in range(RS_ENTRY_NUM)]
         alu = [ALU() for _ in range(RS_ENTRY_NUM)]
+        
+        # 乘法器及其保留站
+        mul_rs = MUL_RSEntry()
+        mul_rs_downstream = MUL_RS_downstream()
+        mul_regs = MultiplierRegs()  # 共享寄存器
+        multiplier_state = MultiplierState()
+        
         rob = ROB()
         lsq = LSQEntry()
         lsq_downstream = LSQ_downstream()
@@ -541,8 +578,15 @@ def build_CPU(depth_log=18, data_base=0x2000):
             committer=committer,
         )
         
+        # 乘法器状态机（每周期执行，处理倒计时和 ROB 写入）
+        mul_rob_idx, mul_rd_data, mul_is_done = multiplier_state.build(
+            mul_regs=mul_regs,
+            rob=rob,
+            metadata=metadata,
+        )
+        
         # CDB Arbitrator 现在返回 CBD_signal 和 BranchControl_signal
-        # 同时负责更新 BHT
+        # 同时负责更新 BHT（乘法器不经过 CDB，在单独的 downstream 处理）
         cbd_signal, branch_ctrl = cdb_arbitrator.build(
             LSU_CBD_req=lsu_cbd_signal,
             ALU_CBD_req=alu_cbd_signal_list,
@@ -560,6 +604,7 @@ def build_CPU(depth_log=18, data_base=0x2000):
             re=re,
             rob=rob,
             rs=rs,
+            mul_rs=mul_rs,  # 添加乘法保留站
             lsq=lsq,
             rat=rat,
             regs=regs,
@@ -579,6 +624,7 @@ def build_CPU(depth_log=18, data_base=0x2000):
             rat=rat,
             rob=rob,
             rs=rs,
+            mul_rs=mul_rs,  # 添加乘法保留站
             lsq=lsq,
             metadata=metadata,
         )
@@ -604,6 +650,16 @@ def build_CPU(depth_log=18, data_base=0x2000):
                 metadata=metadata,
             )
         
+        # MUL_RS downstream - 监听 CDB 更新操作数
+        # 传递 mul 信号用于 RS 更新（当乘法完成时，其他等待该结果的 RS 需要更新）
+        mul_rs_downstream.build(
+            rs=mul_rs,
+            mul_regs=mul_regs,  # 乘法器共享寄存器
+            cbd_signal=cbd_signal,
+            mul_broadcast=(mul_rob_idx, mul_rd_data, mul_is_done),
+            metadata=metadata,
+        )
+
         # Memory access
         mem_access.build(
             dcache=dcache,

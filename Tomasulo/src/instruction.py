@@ -208,8 +208,40 @@ def decoder_J_type(inst, is_eq):
             log(f"Decoded J-type instruction: {name}")
     return is_J, imm, rd
 
+@rewrite_assign
+def decoder_M_type(inst, is_eq):
+    """解码 RISC-V M 扩展乘法指令"""
+    opcode = inst[0:6]
+    funct3 = inst[12:14]
+    funct7 = inst[25:31]
+    rd = inst[7:11]
+    rs1 = inst[15:19]
+    rs2 = inst[20:24]
+    
+    # M 扩展乘法指令 (opcode=0110011, funct7=0000001)
+    M_type_op = [
+        # name    opcode     funct3   funct7     alu_type
+        ["mul",    0b0110011, 0b000, 0b0000001, RV32I_ALU.ALU_MUL],
+        ["mulh",   0b0110011, 0b001, 0b0000001, RV32I_ALU.ALU_MULH],
+        ["mulhsu", 0b0110011, 0b010, 0b0000001, RV32I_ALU.ALU_MULHSU],
+        ["mulhu",  0b0110011, 0b011, 0b0000001, RV32I_ALU.ALU_MULHU],
+    ]
+    
+    is_M = Bits(1)(0)
+    alu_type = Bits(RV32I_ALU.CNT)(1 << RV32I_ALU.ALU_NONE)
+    for [name, op, f3, f7, alu] in M_type_op:
+        eq = (opcode == Bits(7)(op)) & (funct3 == Bits(3)(f3)) & (funct7 == Bits(7)(f7))
+        is_eq[name] = eq
+        is_M = is_M | eq
+        alu_onehot = Bits(RV32I_ALU.CNT)(1 << alu)
+        alu_type = eq.select(alu_onehot, alu_type)
+        with Condition(eq):
+            log(f"Decoded M-type instruction: {name}")
+    
+    return is_M, rs1, rs2, rd, alu_type
+
 class RV32I_ALU:
-    CNT = 15
+    CNT = 19  # 扩展以支持 M 扩展
     ALU_ADD = 0
     ALU_SUB = 1
     ALU_XOR = 2
@@ -225,6 +257,11 @@ class RV32I_ALU:
     ALU_CMP_GEU = 12
     ALU_CMP_NE = 13
     ALU_NONE = 14
+    # M 扩展乘法指令
+    ALU_MUL = 15     # 低 32 位乘法
+    ALU_MULH = 16    # 高 32 位有符号×有符号
+    ALU_MULHSU = 17  # 高 32 位有符号×无符号
+    ALU_MULHU = 18   # 高 32 位无符号×无符号
 
 deocder_signals = Record(
     rs1 = Bits(5),
@@ -254,4 +291,6 @@ deocder_signals = Record(
     is_valid = Bits(1),
     # 分支预测相关：B/JAL可预测跳转，JALR需要stall
     is_predictable_branch = Bits(1),  # B 或 JAL，可以预测
+    # M 扩展乘法指令
+    is_mul = Bits(1),  # 是否为乘法指令（需要发送到 MUL 单元）
 )
