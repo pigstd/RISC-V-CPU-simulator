@@ -657,6 +657,7 @@ def build_CPU(depth_log=18, data_base=0x2000):
                 rs=rs[i],
                 alu=alu[i],
                 cbd_signal=cbd_signal,
+                mul_broadcast=(mul_rob_idx, mul_rd_data, mul_is_done),
                 issue_stall=do_stall,
                 metadata=metadata,
             )

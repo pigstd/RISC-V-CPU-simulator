@@ -53,6 +53,7 @@ class RS_downstream(Downstream):
               rs: RSEntry,
               alu : ALU,
               cbd_signal: Value,
+              mul_broadcast: Value,  # 乘法器完成广播 (rob_idx, rd_data, is_done)
               issue_stall: Value,
               metadata: Value):
         # 依赖 Issuer 的输出，保证在有发射动作时也会调度 RS_downstream
@@ -60,9 +61,20 @@ class RS_downstream(Downstream):
         metadata = metadata.optional(default=UInt(8)(0))
         # 人为依赖 metadata，确保每周期都触发一次（即使上游无事件）
         _ = metadata == metadata
+        
+        # 解包乘法器广播信号
+        mul_rob_idx, mul_rd_data, mul_is_done = mul_broadcast
+        mul_rob_idx = mul_rob_idx.optional(default=UInt(ROB_IDX_WIDTH)(0))
+        mul_rd_data = mul_rd_data.optional(default=UInt(32)(0))
+        mul_is_done = mul_is_done.optional(default=Bits(1)(0))
+        
         log("RS downstream metadata={} busy={} qj_v={} qk_v={} rob_idx={} op={:014b}", metadata, rs.busy[0], rs.qj_valid[0], rs.qk_valid[0], rs.rob_idx[0], rs.op[0])
         log("cbd_signal valid={} ROB_idx={} rd_data=0x{:08x}", cbd_signal.valid, cbd_signal.ROB_idx, cbd_signal.rd_data)
-        with Condition(cbd_signal.valid & (rs.busy[0] == Bits(1)(1))):
+        
+        busy_flag = rs.busy[0]
+        
+        # 监听 CDB 广播，更新操作数
+        with Condition(cbd_signal.valid & (busy_flag == Bits(1)(1))):
             # 如果有新的广播信号，更新 RS 中等待的操作数
             with Condition((rs.qj[0] == cbd_signal.ROB_idx) & ~rs.qj_valid[0]):
                 rs.vj[0] <= cbd_signal.rd_data
@@ -70,7 +82,23 @@ class RS_downstream(Downstream):
             with Condition((rs.qk[0] == cbd_signal.ROB_idx) & ~rs.qk_valid[0]):
                 rs.vk[0] <= cbd_signal.rd_data
                 rs.qk_valid[0] <= Bits(1)(1)  # 标记为就绪
-        busy_flag = rs.busy[0]  # 直接用 busy 位，避免被不必要的比较折叠成常量
+        
+        # 监听乘法器完成广播，更新操作数
+        with Condition(mul_is_done & (busy_flag == Bits(1)(1))):
+            # 检查 qj 是否在等待乘法器的结果
+            mul_qj_match = (~rs.qj_valid[0]) & (rs.qj[0] == mul_rob_idx)
+            with Condition(mul_qj_match):
+                rs.qj_valid[0] <= Bits(1)(1)
+                rs.vj[0] <= mul_rd_data
+                log("RS: update qj from MUL, rob={} data=0x{:08x}", mul_rob_idx, mul_rd_data)
+            
+            # 检查 qk 是否在等待乘法器的结果
+            mul_qk_match = (~rs.qk_valid[0]) & (rs.qk[0] == mul_rob_idx)
+            with Condition(mul_qk_match):
+                rs.qk_valid[0] <= Bits(1)(1)
+                rs.vk[0] <= mul_rd_data
+                log("RS: update qk from MUL, rob={} data=0x{:08x}", mul_rob_idx, mul_rd_data)
+        
         # 需要显式括号，否则 Python 运算符优先级会把 & 和 == 搅在一起
         with Condition(cbd_signal.valid & (busy_flag == Bits(1)(1)) &
                        (cbd_signal.ROB_idx == rs.rob_idx[0])):
