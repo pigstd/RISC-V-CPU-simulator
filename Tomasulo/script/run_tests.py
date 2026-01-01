@@ -25,14 +25,22 @@ from pathlib import Path
 
 # Paths
 SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parent
+# Repository root is two levels up from this script directory
+REPO_ROOT = SCRIPT_DIR.parent.parent
+# Project root (Tomasulo) is the parent of this script dir
+PROJ_ROOT = SCRIPT_DIR.parent
 TEST_SUITE_DIR = REPO_ROOT / "test" / "test_suite"
-WORKSPACE_DIR = SCRIPT_DIR / "src" / "workspace"
-SIM_ENTRY = SCRIPT_DIR / "src" / "main.py"
+# Use project-local src/workspace/main.py when invoking simulator
+SRC_DIR = PROJ_ROOT / "src"
+WORKSPACE_DIR = SRC_DIR / "workspace"
+SIM_ENTRY = SRC_DIR / "main.py"
 
 WORKLOAD_FILE = WORKSPACE_DIR / "workload.exe"
 DATA_FILE = WORKSPACE_DIR / "data.mem"
 LOG_FILE = WORKSPACE_DIR / "log"
+
+# Ensure workspace directory exists
+WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
 
 # Patterns for extracting basic stats from simulator log
 CYCLE_PATTERN = re.compile(r"Cycle @(\d+(?:\.\d+)?)")
@@ -42,6 +50,9 @@ COMMIT_PATTERN = re.compile(
     r"commit: retire rob=\d+\s+pc=0x[0-9a-fA-F]+\s+rd=(\d+)\s+is_store=\d+\s+value=0x([0-9a-fA-F]+)",
     re.IGNORECASE,
 )
+# 分支预测统计
+BRANCH_PATTERN = re.compile(r"CDB branch:.*is_B=1")
+MISPRED_PATTERN = re.compile(r"CDB branch:.*mispred=1")
 
 
 def discover_tests():
@@ -55,6 +66,14 @@ def discover_tests():
                 ans_file = entry / f"{name}.ans"
                 if exe_file.exists() and ans_file.exists():
                     tests.append(name)
+    # Also accept flat layout under test/: <name>.exe + <name>.ans
+    TEST_DIR = REPO_ROOT / "test"
+    if TEST_DIR.exists():
+        for exe in sorted(TEST_DIR.glob("*.exe")):
+            name = exe.stem
+            ans = TEST_DIR / f"{name}.ans"
+            if ans.exists() and name not in tests:
+                tests.append(name)
     return tests
 
 
@@ -111,10 +130,14 @@ def extract_stats(log_text: str) -> dict:
     cycles = [float(c) for c in CYCLE_PATTERN.findall(log_text)]
     commits = COMMIT_PATTERN.findall(log_text)
     fetches = FETCH_PATTERN.findall(log_text)
+    branches = BRANCH_PATTERN.findall(log_text)
+    mispreds = MISPRED_PATTERN.findall(log_text)
     stats = {
         "cycles": int(cycles[-1]) if cycles else 0,
         "commits": len(commits),
         "fetches": len(fetches),
+        "branches": len(branches),
+        "mispreds": len(mispreds),
     }
     return stats
 
@@ -132,10 +155,10 @@ def extract_a0(log_text: str):
     return a0_vals[-1] if a0_vals else None
 
 
-def run_test(name: str, sim_threshold: int = None, idle_threshold: int = None, verbose: bool = False):
+def run_test(name: str, sim_threshold: int = None, idle_threshold: int = None, verbose: bool = False, use_verilator: bool = False):
     """Run one test; returns (ok, message, stats)."""
     files = get_test_files(name)
-    stats = {"cycles": 0, "commits": 0, "fetches": 0}
+    stats = {"cycles": 0, "commits": 0, "fetches": 0, "branches": 0, "mispreds": 0}
 
     if not files["exe"].exists():
         return False, f"missing {name}.exe", stats
@@ -162,18 +185,21 @@ def run_test(name: str, sim_threshold: int = None, idle_threshold: int = None, v
     if LOG_FILE.exists():
         LOG_FILE.unlink()
 
+    cmd = [
+        sys.executable,
+        str(SIM_ENTRY),
+        "--sim-threshold",
+        str(sim_threshold),
+        "--idle-threshold",
+        str(idle_threshold),
+        "--data-base",
+        hex(data_base),
+    ]
+    if not use_verilator:
+        cmd.append("--no-verilator")
     try:
         proc = subprocess.run(
-            [
-                sys.executable,
-                str(SIM_ENTRY),
-                "--sim-threshold",
-                str(sim_threshold),
-                "--idle-threshold",
-                str(idle_threshold),
-                "--data-base",
-                hex(data_base),
-            ],
+            cmd,
             capture_output=True,
             text=True,
             timeout=120,
@@ -195,6 +221,31 @@ def run_test(name: str, sim_threshold: int = None, idle_threshold: int = None, v
             print(f"[{name}] log tail:\n{log_text[-800:]}")
         return False, "no a0 writeback found", stats
 
+    # If Verilator was requested, validate verilator_log as well
+    if use_verilator:
+        veri_log = WORKSPACE_DIR / "verilator_log"
+        if veri_log.exists():
+            veri_text = veri_log.read_text()
+            veri_a0 = extract_a0(veri_text)
+            veri_stats = extract_stats(veri_text)
+        else:
+            veri_a0 = None
+            veri_stats = {}
+
+        if veri_a0 is None:
+            if verbose and veri_log.exists():
+                print(f"[{name}] verilator log tail:\n{veri_text[-800:]}")
+            return False, "verilator: no a0 writeback found", stats
+
+        if a0_val != expected:
+            return False, f"sim a0 mismatch: got {a0_val}, expected {expected}", stats
+        if veri_a0 != expected:
+            return False, f"verilator a0 mismatch: got {veri_a0}, expected {expected}", stats
+
+        msg = f"sim a0={a0_val}, verilator a0={veri_a0} (expected {expected})"
+        return True, msg, stats
+
+    # Default: only validate simulator (SIM)
     if a0_val != expected:
         return False, f"a0 mismatch: got {a0_val}, expected {expected}", stats
 
@@ -208,7 +259,8 @@ def main():
     parser.add_argument("--list", action="store_true", help="list available tests")
     parser.add_argument("--sim-threshold", type=int, default=None, help="override sim threshold")
     parser.add_argument("--idle-threshold", type=int, default=None, help="override idle threshold")
-    parser.add_argument("-v", "--verbose", action="store_true", help="show log tail on failure")
+    parser.add_argument("-v", "--verilator", action="store_true", help="enable Verilator run (default: only run Python sim)")
+    parser.add_argument("--verbose", action="store_true", help="show log tail on failure")
     parser.add_argument("--no-report", action="store_true", help="skip writing report file")
     args = parser.parse_args()
 
@@ -225,7 +277,7 @@ def main():
         return
 
     print(f"Running {len(targets)} test(s) with Tomasulo simulator...\n")
-    header = f"{'Test Name':<20} {'Status':<6} {'Cycles':>8} {'Commits':>8} {'Fetches':>8} Message"
+    header = f"{'Test Name':<20} {'Status':<6} {'Cycles':>8} {'Instrs':>8} {'Branches':>8} {'Mispred':>8} {'Acc%':>6} Message"
     separator = "-" * len(header)
     print(header)
     print(separator)
@@ -238,9 +290,20 @@ def main():
             sim_threshold=args.sim_threshold,
             idle_threshold=args.idle_threshold,
             verbose=args.verbose,
+            use_verilator=args.verilator,
         )
         status = "PASS" if ok else "FAIL"
-        line = f"{name:<20} {status:<6} {stats['cycles']:>8} {stats['commits']:>8} {stats['fetches']:>8} {msg}"
+        # 计算预测正确率
+        branches = stats.get('branches', 0)
+        mispreds = stats.get('mispreds', 0)
+        commits = stats.get('commits', 0)
+        instrs = commits + mispreds  # 总指令数 = 提交数 + 误预测数
+        if branches > 0:
+            accuracy = (branches - mispreds) / branches * 100
+            acc_str = f"{accuracy:.1f}"
+        else:
+            acc_str = "N/A"
+        line = f"{name:<20} {status:<6} {stats['cycles']:>8} {instrs:>8} {branches:>8} {mispreds:>8} {acc_str:>6} {msg}"
         print(line)
         report_lines.append(line)
         passed += int(ok)

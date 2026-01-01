@@ -1,3 +1,4 @@
+import os
 from assassyn.frontend import *
 from assassyn.backend import *
 from assassyn import utils, backend
@@ -129,12 +130,12 @@ class Driver(Module):
             ports={}
         )
     @module.combinational
-    def build(self, fecher : Fetcher):
+    def build(self, fetcher : Fetcher):
         is_init = RegArray(UInt(1), 1, initializer=[1])
 
         with Condition(is_init[0] == UInt(1)(1)):
             is_init[0] <= UInt(1)(0)
-            fecher.async_called()
+            fetcher.async_called()
             log("Naive CPU Simulation Started")
         # with Condition(is_init[0] == UInt(1)(0)):
             # log("Naive CPU Simulation Running")
@@ -167,7 +168,7 @@ def build_naive_CPU(depth_log=18):
         memoryaccess.build(dcache=dcache, regs=regs, writeback=writeback)
         decoder.build(icache=icache, executor=executor)
         pc_reg, pc_addr = fetcher.build(icache=icache, decoder=decoder, pc_reg=pc_reg)
-        driver.build(fecher=fetcher)
+        driver.build(fetcher=fetcher)
         executor.build(regs=regs, pc_reg=pc_reg, memoryaccess=memoryaccess, dcache=dcache)
     return sys
 

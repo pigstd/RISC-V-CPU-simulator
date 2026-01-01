@@ -1,20 +1,22 @@
 from assassyn.frontend import *
 try:
     from .instruction import *
+    from .ROB import ROB_IDX_WIDTH
 except ImportError:
     from Tomasulo.src.instruction import *
+    from Tomasulo.src.ROB import ROB_IDX_WIDTH
 
 LSU_signal = Record(
     is_load = Bits(1),
     is_store = Bits(1),
-    ROB_idx = UInt(4),    # 指令在 ROB 中的索引
+    ROB_idx = UInt(ROB_IDX_WIDTH),    # 指令在 ROB 中的索引
     address = UInt(32),   # 计算得到的内存地址
     rs2_value = UInt(32), # 源操作数 2 的值（仅用于存储指令）
     
 )
 
 LSU_CBD_signal = Record(
-    ROB_idx = UInt(4),    # 指令在 ROB 中的索引
+    ROB_idx = UInt(ROB_IDX_WIDTH),    # 指令在 ROB 中的索引
     rd_data = UInt(32),   # 写回数据 (仅用于 load 指令)
     valid = Bits(1),     # 数据有效标志
     is_load = Bits(1),  # 是否为 load 指令

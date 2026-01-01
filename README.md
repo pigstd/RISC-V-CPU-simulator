@@ -13,3 +13,6 @@ A simple RISC-V CPU simulator implemented in Python using [assassyn](https://git
 以上代码都需要：
 
 写出 .c 代码，用 [riscv-gnu-toolchain-gcc](https://github.com/riscv-collab/riscv-gnu-toolchain) 编译出来 .o，把对应函数的 binary 抽出来给 CPU 跑。
+
+
+当前文件框架

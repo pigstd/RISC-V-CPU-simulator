@@ -359,6 +359,7 @@ def main():
     parser.add_argument("--idle-threshold", type=int, default=100, help="idle cycles before stop")
     parser.add_argument("--data-base", type=lambda x: int(x, 0), default=0x2000, 
                         help="data segment base address (default: 0x2000)")
+    parser.add_argument("--no-verilator", action="store_true", help="skip running verilator")
     args = parser.parse_args()
 
     # 设置数据段基地址
@@ -378,10 +379,15 @@ def main():
     print("simulate output is written in /workspace/log")
     with open(f"{workspace}/log", "w") as f:
         print(output, file = f)
-    ver_output = run_verilator(vcd)
-    print("verilator output is written in /workspace/verilator_log")
-    with open(f"{workspace}/verilator_log", "w") as f:
-        print(ver_output, file = f)
+    # Optionally run verilator; guard with --no-verilator to allow environments without verilator
+    if not args.no_verilator:
+        try:
+            ver_output = run_verilator(vcd)
+            print("verilator output is written in /workspace/verilator_log")
+            with open(f"{workspace}/verilator_log", "w") as f:
+                print(ver_output, file = f)
+        except Exception as e:
+            print(f"Warning: run_verilator failed: {e}")
 
 if __name__ == "__main__":
     main()

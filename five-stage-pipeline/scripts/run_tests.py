@@ -24,10 +24,14 @@ from pathlib import Path
 
 # Paths
 SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parent
+# Repository root is two levels up from this scripts directory
+REPO_ROOT = SCRIPT_DIR.parent.parent
+# Project root (five-stage-pipeline) is the parent of this scripts dir
+PROJ_ROOT = SCRIPT_DIR.parent
 TEST_DIR = REPO_ROOT / "test"
 TEST_SUITE_DIR = TEST_DIR / "test_suite"
-SRC_DIR = REPO_ROOT / "src"
+# Use project-local src/workspace/main.py
+SRC_DIR = PROJ_ROOT / "src"
 WORKSPACE_DIR = SRC_DIR / "workspace"
 SIM_ENTRY = SRC_DIR / "main.py"
 
@@ -100,6 +104,13 @@ def discover_tests():
                 ans_file = test_dir / f"{name}.ans"
                 if exe_file.exists() and ans_file.exists():
                     tests.append(name)
+    # Also accept flat layout: test/<name>.exe + test/<name>.ans
+    if TEST_DIR.exists():
+        for exe in sorted(TEST_DIR.glob("*.exe")):
+            name = exe.stem
+            ans = TEST_DIR / f"{name}.ans"
+            if ans.exists() and name not in tests:
+                tests.append(name)
     return tests
 
 
@@ -145,7 +156,7 @@ def read_expected(ans_file: Path) -> int:
     return None
 
 
-def run_test(name: str, sim_threshold: int = None, idle_threshold: int = None, verbose: bool = False):
+def run_test(name: str, sim_threshold: int = None, idle_threshold: int = None, verbose: bool = False, use_verilator: bool = False):
     """Run a single test case. Returns (success, message, stats)."""
     files = get_test_files(name)
     stats = {
@@ -192,15 +203,18 @@ def run_test(name: str, sim_threshold: int = None, idle_threshold: int = None, v
         (WORKSPACE_DIR / "data.mem").write_text("")
     
     # Run simulator
+    cmd = [
+        sys.executable,
+        str(SIM_ENTRY),
+        "--sim-threshold", str(sim_threshold),
+        "--idle-threshold", str(idle_threshold),
+        "--data-base", hex(data_base),
+    ]
+    if not use_verilator:
+        cmd.append("--no-verilator")
     try:
         proc = subprocess.run(
-            [
-                sys.executable,
-                str(SIM_ENTRY),
-                "--sim-threshold", str(sim_threshold),
-                "--idle-threshold", str(idle_threshold),
-                "--data-base", hex(data_base),
-            ],
+            cmd,
             capture_output=True,
             text=True,
             timeout=60,  # 60 second timeout
@@ -229,36 +243,41 @@ def run_test(name: str, sim_threshold: int = None, idle_threshold: int = None, v
             print(f"  log tail:\n{log_text[-1000:]}")
         return False, "no a0 writeback found", stats
     
-    # Read verilator log
-    veri_log_file = WORKSPACE_DIR / "verilator_log"
-    if veri_log_file.exists():
-        veri_log_text = veri_log_file.read_text()
-        veri_stats = extract_stats(veri_log_text)
-        veri_a0 = extract_a0(veri_log_text)
-        timing = parse_verilator_timing(veri_log_text)
-        stats["verilator_sim_time_ns"] = timing["sim_time_ns"]
-        stats["verilator_real_time_s"] = timing["real_time_s"]
-        stats["verilator_ratio"] = timing["ratio"]
+    if use_verilator:
+        veri_log_file = WORKSPACE_DIR / "verilator_log"
+        if veri_log_file.exists():
+            veri_log_text = veri_log_file.read_text()
+            veri_stats = extract_stats(veri_log_text)
+            veri_a0 = extract_a0(veri_log_text)
+            timing = parse_verilator_timing(veri_log_text)
+            stats["verilator_sim_time_ns"] = timing["sim_time_ns"]
+            stats["verilator_real_time_s"] = timing["real_time_s"]
+            stats["verilator_ratio"] = timing["ratio"]
+        else:
+            veri_log_text = ""
+            veri_a0 = None
+
+        if veri_a0 is None:
+            if verbose and veri_log_text:
+                print(f"  verilator log tail:\n{veri_log_text[-1000:]}")
+            return False, "verilator: no a0 writeback found", stats
+
+        # Check results against expected
+        if sim_a0 != expected:
+            return False, f"sim a0 mismatch: got {sim_a0}, expected {expected}", stats
+        if veri_a0 != expected:
+            return False, f"verilator a0 mismatch: got {veri_a0}, expected {expected}", stats
+
+        msg = f"sim a0={sim_a0}, verilator a0={veri_a0} (expected {expected})"
+        if veri_stats.get("cycles", 0):
+            msg += f" | veri cycles={veri_stats['cycles']}"
+        return True, msg, stats
     else:
-        veri_log_text = ""
-        veri_a0 = None
-    
-    if veri_a0 is None:
-        if verbose and veri_log_text:
-            print(f"  verilator log tail:\n{veri_log_text[-1000:]}")
-        return False, "verilator: no a0 writeback found", stats
-    
-    # Check results
-    if sim_a0 != expected:
-        return False, f"sim a0 mismatch: got {sim_a0}, expected {expected}", stats
-    if veri_a0 != expected:
-        return False, f"verilator a0 mismatch: got {veri_a0}, expected {expected}", stats
-    
-    msg = f"sim a0={sim_a0}, verilator a0={veri_a0} (expected {expected})"
-    # If verilator stats available, append brief info for debugging
-    if veri_stats.get("cycles", 0):
-        msg += f" | veri cycles={veri_stats['cycles']}"
-    return True, msg, stats
+        # Only validate simulator (SIM) output a0; skip Verilator checks
+        if sim_a0 != expected:
+            return False, f"sim a0 mismatch: got {sim_a0}, expected {expected}", stats
+        msg = f"sim a0={sim_a0} (expected {expected})"
+        return True, msg, stats
 
 
 def main():
@@ -269,7 +288,8 @@ def main():
     parser.add_argument("--list", action="store_true", help="list available tests")
     parser.add_argument("--sim-threshold", type=int, default=None, help="max simulation steps (overrides config)")
     parser.add_argument("--idle-threshold", type=int, default=None, help="idle cycles before stop (overrides config)")
-    parser.add_argument("-v", "--verbose", action="store_true", help="verbose output on failure")
+    parser.add_argument("-v", "--verilator", action="store_true", help="enable Verilator run (default: only run Python sim)")
+    parser.add_argument("--verbose", action="store_true", help="verbose output on failure")
     parser.add_argument("--no-report", action="store_true", help="do not generate test report")
     args = parser.parse_args()
     
@@ -319,7 +339,8 @@ def main():
             name,
             sim_threshold=args.sim_threshold,
             idle_threshold=args.idle_threshold,
-            verbose=args.verbose
+            verbose=args.verbose,
+            use_verilator=args.verilator,
         )
         status = "PASS" if ok else "FAIL"
         cycles = stats.get("cycles", 0)
