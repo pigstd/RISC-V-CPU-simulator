@@ -1,4 +1,5 @@
 Test Name            Status   Cycles   Instrs Branches  Mispred   Acc% Message
 ------------------------------------------------------------------------------
-multiple             PASS         46       23        0        0    N/A a0=65 (expected 65)
-Summary: 1/1 passed, 0 failed
+array_sum            PASS        255      117        7        1   85.7 a0=210 (expected 210)
+bitcount             PASS        192       97        9        1   88.9 a0=5 (expected 5)
+Summary: 2/2 passed, 0 failed

@@ -6,12 +6,12 @@
 
 ### 1.1 支持的指令
 
-| 指令 | 功能 | 操作数 | 结果 |
-|-----|-----|-------|-----|
-| `MUL` | 乘法（低 32 位） | rs1 × rs2 | rd = (rs1 × rs2)[31:0] |
-| `MULH` | 高位有符号乘法 | signed(rs1) × signed(rs2) | rd = (rs1 × rs2)[63:32] |
-| `MULHSU` | 高位混合符号乘法 | signed(rs1) × unsigned(rs2) | rd = (rs1 × rs2)[63:32] |
-| `MULHU` | 高位无符号乘法 | unsigned(rs1) × unsigned(rs2) | rd = (rs1 × rs2)[63:32] |
+| 指令     | 功能             | 操作数                        | 结果                    |
+| -------- | ---------------- | ----------------------------- | ----------------------- |
+| `MUL`    | 乘法（低 32 位） | rs1 × rs2                     | rd = (rs1 × rs2)[31:0]  |
+| `MULH`   | 高位有符号乘法   | signed(rs1) × signed(rs2)     | rd = (rs1 × rs2)[63:32] |
+| `MULHSU` | 高位混合符号乘法 | signed(rs1) × unsigned(rs2)   | rd = (rs1 × rs2)[63:32] |
+| `MULHU`  | 高位无符号乘法   | unsigned(rs1) × unsigned(rs2) | rd = (rs1 × rs2)[63:32] |
 
 ### 1.2 指令编码
 
@@ -72,12 +72,12 @@ funct3 编码：
 
 ### 2.2 关键组件
 
-| 组件 | 类名 | 数量 | 功能 |
-|-----|-----|-----|-----|
-| 乘法保留站 | `MUL_RSEntry` | 2 | 缓存乘法指令，等待操作数就绪 |
-| 保留站逻辑 | `MUL_RS_downstream` | 2 | 监听 CDB，发射就绪指令 |
-| 共享寄存器 | `MultiplierRegs` | 1 | 乘法器输入/状态寄存器 |
-| 乘法状态机 | `MultiplierState` | 1 | 4 周期计算状态机 |
+| 组件       | 类名                | 数量 | 功能                         |
+| ---------- | ------------------- | ---- | ---------------------------- |
+| 乘法保留站 | `MUL_RSEntry`       | 2    | 缓存乘法指令，等待操作数就绪 |
+| 保留站逻辑 | `MUL_RS_downstream` | 2    | 监听 CDB，发射就绪指令       |
+| 共享寄存器 | `MultiplierRegs`    | 1    | 乘法器输入/状态寄存器        |
+| 乘法状态机 | `MultiplierState`   | 1    | 4 周期计算状态机             |
 
 ## 3. 数据结构
 
@@ -153,7 +153,7 @@ class RV32I_ALU:
 
 3. 就绪检测：
    ready = busy & qj_valid & qk_valid & ~fired & mul_idle
-   
+
 4. 发射（当 ready=1）：
    - 写入 MultiplierRegs (op1, op2, alu_type, rob_idx)
    - 设置 pending = 1
@@ -291,30 +291,30 @@ def build(self, mul_regs: MultiplierRegs, rob, metadata):
     op2 = mul_regs.op2[0]
     rob_idx = mul_regs.rob_idx[0]
     pending = mul_regs.pending[0]
-    
+
     # 状态判断
     is_idle = (cycle_cnt == UInt(4)(0))
     is_done = (cycle_cnt == UInt(4)(1))
     is_busy = ~is_idle & ~is_done
-    
+
     # 乘法结果（组合逻辑，始终计算）
     mul_result = (op1 * op2).bitcast(UInt(32))
-    
+
     # 状态转移 1：IDLE + pending → 开始计算
     with Condition(is_idle & pending):
         mul_regs.cycle_cnt[0] <= UInt(4)(MUL_LATENCY)  # = 4
         mul_regs.pending[0] <= Bits(1)(0)
-    
+
     # 状态转移 2：BUSY → 继续倒计时
     with Condition(is_busy):
         mul_regs.cycle_cnt[0] <= cycle_cnt - UInt(4)(1)
-    
+
     # 状态转移 3：DONE → 输出结果，回到 IDLE
     with Condition(is_done):
         mul_regs.cycle_cnt[0] <= UInt(4)(0)
         rob.ready[rob_idx] <= Bits(1)(1)
         rob.value[rob_idx] <= mul_result
-    
+
     return rob_idx, mul_result, is_done
 ```
 
@@ -388,11 +388,34 @@ MUL 2: [ST][ST][ST][ST][ST][Is][Fi][C3][C2][C1]
        └── Issue 阶段 stall 5 个周期
 ```
 
-## 6. CDB Bypass 设计
+## 6. 多广播总线架构
 
-### 6.1 为什么不使用 CDB
+### 6.1 为什么采用独立广播
 
-原始设计中 CDB 仲裁器存在框架限制（`.valid` intrinsic bug），导致乘法器结果无法正常广播。因此采用 **直接写入 ROB** 的设计。
+本实现采用 **多条广播总线** 设计，乘法器结果通过独立的 `mul_broadcast` 广播，而非走 CDB 仲裁：
+
+```
+                    执行单元完成
+                         │
+         ┌───────────────┼───────────────┐
+         ▼               ▼               ▼
+    ┌─────────┐     ┌─────────┐     ┌─────────┐
+    │CDB (ALU)│     │CDB (LSU)│     │MUL_BCAST│
+    │ 4个ALU  │     │ 1个LSU  │     │  乘法器 │
+    │ 仲裁选1 │     │  独占   │     │  独占   │
+    └────┬────┘     └────┬────┘     └────┬────┘
+         │               │               │
+         └───────────────┴───────────────┘
+                         │
+                         ▼
+              所有 RS 同时监听 3 条总线
+```
+
+**设计优势：**
+
+- **无仲裁延迟**：乘法完成后立即广播，不需要等待 CDB 空闲
+- **更高吞吐**：ALU 和乘法器可以同周期各广播一个结果
+- **实现简单**：避免修改复杂的 CDB 仲裁逻辑
 
 ### 6.2 结果传播路径
 
@@ -407,35 +430,58 @@ MUL 2: [ST][ST][ST][ST][ST][Is][Fi][C3][C2][C1]
          │
          └──────────────────────► mul_broadcast 信号
                                   │
-                                  ▼
-                            ┌───────────────────┐
-                            │ MUL_RS_downstream │
-                            │ (更新等待的操作数)│
-                            └───────────────────┘
+                 ┌────────────────┼────────────────┐
+                 ▼                ▼                ▼
+         ┌─────────────┐  ┌─────────────┐  ┌─────────────┐
+         │ RS ×4       │  │ MUL_RS ×2   │  │    LSQ      │
+         │(普通保留站) │  │(乘法保留站) │  │ (访存队列)  │
+         └─────────────┘  └─────────────┘  └─────────────┘
 ```
 
-### 6.3 RS 更新源
+### 6.3 RS 监听两个广播源
 
-每个 MUL_RS entry 会监听两个数据源：
-
-1. **CDB 广播**：ALU 和 LSU 的结果
-2. **乘法器完成广播**：其他乘法指令的结果
+**关键：所有 RS 必须同时监听 CDB 和乘法器广播！**
 
 ```python
-# 监听 CDB
-with Condition(busy & cbd_valid):
-    if qj 等待 cbd_rob_idx:
-        vj = cbd_rd_data, qj_valid = 1
-    if qk 等待 cbd_rob_idx:
-        vk = cbd_rd_data, qk_valid = 1
+# RS_downstream.build() 中的监听逻辑
 
-# 监听乘法器
-with Condition(busy & mul_is_done):
-    if qj 等待 mul_rob_idx:
-        vj = mul_rd_data, qj_valid = 1
-    if qk 等待 mul_rob_idx:
-        vk = mul_rd_data, qk_valid = 1
+# 1. 监听 CDB 广播（ALU/LSU 结果）
+with Condition(cbd_signal.valid & busy):
+    with Condition((qj == cbd_signal.ROB_idx) & ~qj_valid):
+        vj <= cbd_signal.rd_data
+        qj_valid <= 1
+    with Condition((qk == cbd_signal.ROB_idx) & ~qk_valid):
+        vk <= cbd_signal.rd_data
+        qk_valid <= 1
+
+# 2. 监听乘法器广播（乘法结果）
+with Condition(mul_is_done & busy):
+    with Condition((qj == mul_rob_idx) & ~qj_valid):
+        vj <= mul_rd_data
+        qj_valid <= 1
+    with Condition((qk == mul_rob_idx) & ~qk_valid):
+        vk <= mul_rd_data
+        qk_valid <= 1
 ```
+
+### 6.4 常见 Bug：普通 RS 未监听乘法广播
+
+如果 `RS_downstream` 只监听 `cbd_signal` 而不监听 `mul_broadcast`，会导致：
+
+```
+程序：
+  MUL x1, x2, x3    ; 乘法，结果写 x1
+  ADD x4, x1, x5    ; 加法，依赖 x1
+
+执行过程：
+  周期 N:   MUL 发射到乘法器
+  周期 N+1: ADD 发射到 RS，qj 等待 MUL 的 ROB 索引
+  周期 N+4: MUL 完成，广播 mul_broadcast
+
+  BUG: RS 没有监听 mul_broadcast → ADD 永远等待 → 死锁！
+```
+
+**修复**：确保 `RS_downstream.build()` 接收并处理 `mul_broadcast` 参数。
 
 ## 7. Flush 处理
 
@@ -450,6 +496,7 @@ for i in range(MUL_RS_NUM):  # 清空所有 MUL_RS
 ```
 
 **注意**：正在乘法器中执行的指令不会被取消，因为：
+
 1. 乘法器没有实现中断机制
 2. 但其结果写入的 ROB entry 已被 Flush，commit 时会被忽略
 
@@ -458,6 +505,7 @@ for i in range(MUL_RS_NUM):  # 清空所有 MUL_RS
 ### 8.1 测试用例
 
 **simple_mul.c:**
+
 ```c
 int main() {
     int a = 7;
@@ -467,6 +515,7 @@ int main() {
 ```
 
 **vector_mul_real.c:**
+
 ```c
 int A[10] = {1,2,3,4,5,6,7,8,9,10};
 int B[10] = {10,9,8,7,6,5,4,3,2,1};
@@ -481,23 +530,23 @@ int main() {
 
 ### 8.2 测试结果
 
-| 测试 | 状态 | 周期数 | 指令数 |
-|-----|-----|-------|-------|
-| simple_mul | ✅ PASS | 43 | 19 |
-| vector_mul_real | ✅ PASS | 486 | 268 |
+| 测试            | 状态    | 周期数 | 指令数 |
+| --------------- | ------- | ------ | ------ |
+| simple_mul      | ✅ PASS | 43     | 19     |
+| vector_mul_real | ✅ PASS | 486    | 268    |
 
 ## 9. 文件位置
 
-| 组件 | 文件 | 行号 |
-|-----|-----|-----|
-| 乘法指令解码 | `src/instruction.py` | 220-240 |
-| ALU 类型定义 | `src/instruction.py` | 261-264 |
-| MultiplierRegs | `src/multiplier.py` | 30-40 |
-| MultiplierState | `src/multiplier.py` | 43-106 |
-| MUL_RSEntry | `src/multiplier.py` | 149-161 |
-| MUL_RS_downstream | `src/multiplier.py` | 164-260 |
-| Issue 逻辑 | `src/main.py` | 268-291 |
-| Flush 逻辑 | `src/main.py` | 515-520 |
+| 组件              | 文件                 | 行号    |
+| ----------------- | -------------------- | ------- |
+| 乘法指令解码      | `src/instruction.py` | 220-240 |
+| ALU 类型定义      | `src/instruction.py` | 261-264 |
+| MultiplierRegs    | `src/multiplier.py`  | 30-40   |
+| MultiplierState   | `src/multiplier.py`  | 43-106  |
+| MUL_RSEntry       | `src/multiplier.py`  | 149-161 |
+| MUL_RS_downstream | `src/multiplier.py`  | 164-260 |
+| Issue 逻辑        | `src/main.py`        | 268-291 |
+| Flush 逻辑        | `src/main.py`        | 515-520 |
 
 ## 10. 未来优化方向
 

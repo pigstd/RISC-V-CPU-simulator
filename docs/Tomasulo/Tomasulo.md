@@ -32,7 +32,6 @@ RISC-V (RV32I) 乱序执行处理器设计文档
 
 更新 pc：如果 we_reg 为 1，则 pc_reg 更新为下一个地址 (pc_reg + 4)，否则保持不变。
 
-
 ### Stage 2: 译码与发射 (Issue)
 
 功能: 组合逻辑译码，并在同周期写入指令队列。
@@ -250,10 +249,342 @@ Mock 环境: 写一个简单的单周期 RAM 模拟内存。
 阶段一 (前端): 实现 Fetch -> Queue -> Decode -> Issue 的空逻辑（只做计数，不发 RS）。
 验证分支 Stall 逻辑。
 
-阶段二 (ALU通路): 实现 RS, Arbiter, CDB, ALU。验证 ADD, SUB 指令的乱序发射、执行、CDB 广播。
+阶段二 (ALU 通路): 实现 RS, Arbiter, CDB, ALU。验证 ADD, SUB 指令的乱序发射、执行、CDB 广播。
 
-阶段三 (ROB与提交): 加入 ROB 和 RAT。验证指令能正确 Commit 到模拟的 Register File。
+阶段三 (ROB 与提交): 加入 ROB 和 RAT。验证指令能正确 Commit 到模拟的 Register File。
 
 阶段四 (访存): 加入 LSQ 和 Store 计数器。验证 SW 随后 LW 的阻塞逻辑。
 
 集成测试: 运行简单的汇编程序（如斐波那契数列计算）。
+
+---
+
+# 6. M 扩展：乘法器实现
+
+## 6.1 多广播总线架构
+
+本实现采用 **多条广播总线** 的现代处理器设计，而非传统的单条 CDB：
+
+```
+                    ┌─────────────────────────────────────────┐
+                    │              执行单元输出               │
+                    └─────────────────────────────────────────┘
+                              │         │         │
+                              ▼         ▼         ▼
+                    ┌─────────┐ ┌─────────┐ ┌─────────┐
+                    │CDB (ALU)│ │CDB (LSU)│ │MUL_BCAST│
+                    │ 4个ALU  │ │ 1个LSU  │ │ 乘法器  │
+                    │ 仲裁选1 │ │  独占   │ │  独占   │
+                    └────┬────┘ └────┬────┘ └────┬────┘
+                         │          │          │
+                         └──────────┴──────────┘
+                                    │
+                                    ▼
+                    ┌─────────────────────────────────────────┐
+                    │          所有 RS 同时监听 3 条总线       │
+                    │   (普通 RS × 4) + (乘法 RS × 2) + LSQ   │
+                    └─────────────────────────────────────────┘
+```
+
+### 为什么不走单条 CDB？
+
+| 设计方案       | 优点                     | 缺点                             |
+| -------------- | ------------------------ | -------------------------------- |
+| **单条 CDB**   | 布线简单，硬件成本低     | 执行单元竞争，乘法结果可能被延迟 |
+| **多条广播线** | 无仲裁冲突，结果立即可用 | 每个 RS 需监听多条总线           |
+
+现代高性能处理器（如 Intel/AMD）通常采用多条结果总线，每个执行端口有独立的广播通道。
+
+## 6.2 乘法器广播信号
+
+乘法器完成时产生的广播信号：
+
+```python
+# MultiplierState.build() 返回值
+mul_broadcast = (mul_rob_idx, mul_rd_data, mul_is_done)
+
+# 信号含义：
+# - mul_rob_idx:  完成指令的 ROB 索引 (UInt(ROB_IDX_WIDTH))
+# - mul_rd_data:  乘法计算结果 (UInt(32))
+# - mul_is_done:  完成标志 (Bits(1))，仅在完成周期为 1
+```
+
+## 6.3 RS 监听逻辑
+
+每个 RS（包括普通 RS 和乘法 RS）同时监听 **CDB** 和 **乘法器广播**：
+
+```python
+# RS_downstream.build() 核心逻辑
+
+# 1. 监听 CDB 广播（来自 ALU/LSU）
+with Condition(cbd_signal.valid & busy):
+    with Condition((qj == cbd_signal.ROB_idx) & ~qj_valid):
+        vj <= cbd_signal.rd_data
+        qj_valid <= 1
+    with Condition((qk == cbd_signal.ROB_idx) & ~qk_valid):
+        vk <= cbd_signal.rd_data
+        qk_valid <= 1
+
+# 2. 监听乘法器广播
+with Condition(mul_is_done & busy):
+    with Condition((qj == mul_rob_idx) & ~qj_valid):
+        vj <= mul_rd_data
+        qj_valid <= 1
+    with Condition((qk == mul_rob_idx) & ~qk_valid):
+        vk <= mul_rd_data
+        qk_valid <= 1
+```
+
+**关键点**：如果普通 RS 不监听乘法器广播，当 ADD 指令依赖 MUL 结果时会死锁！
+
+## 6.4 乘法器执行流程
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         乘法指令完整执行流程                                  │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+1. Issue 阶段：
+   ├── 检测 is_mul 标志
+   ├── 分配 MUL_RS 条目（2 个槽位）
+   └── 写入操作数/标签
+
+2. MUL_RS Downstream（每周期）：
+   ├── 监听 CDB 和 mul_broadcast 更新操作数
+   ├── 检测就绪：busy & qj_valid & qk_valid & ~fired & mul_idle
+   └── 就绪时发射到共享乘法器
+
+3. 乘法器状态机（4 周期延迟）：
+   ├── 周期 1: pending=1 → cycle_cnt=4
+   ├── 周期 2-4: 倒计时
+   └── 周期 5: is_done=1, 写 ROB, 广播结果
+
+4. 结果传播：
+   ├── 直接写入 ROB (ready=1, value=result)
+   └── 广播到所有 RS（通过 mul_broadcast）
+```
+
+---
+
+# 7. 主函数架构 (main.py)
+
+## 7.1 整体结构
+
+```python
+class TomasuloCPU(Module):
+    @module.sequential(clk="clk", rst="rst")
+    def build(self, icache, dcache):
+        # ===== 1. 组件实例化 =====
+        rob = ROB()                           # 重排序缓冲区
+        rat = [RAT_Entry() for _ in range(32)] # 寄存器重命名表
+        rs = [RSEntry() for _ in range(4)]    # 普通保留站 ×4
+        mul_rs = [MUL_RSEntry() for _ in range(2)]  # 乘法保留站 ×2
+        alu = [ALU() for _ in range(4)]       # ALU ×4
+        mul_regs = MultiplierRegs()           # 乘法器共享寄存器
+        lsq = LSQ()                           # 访存队列
+
+        # ===== 2. 执行单元构建 =====
+        lsu_cbd = lsu.build(dcache)           # LSU → CBD 信号
+        alu_cbd = [alu[i].build() for i in range(4)]  # ALU → CBD 信号
+        mul_broadcast = multiplier_state.build(mul_regs, rob)  # 乘法器
+
+        # ===== 3. CDB 仲裁 =====
+        cbd_signal, branch_ctrl = cdb_arbitrator.build(
+            LSU_CBD_req=lsu_cbd,
+            ALU_CBD_req=alu_cbd,
+            rob=rob, bht=bht
+        )
+
+        # ===== 4. Issue 阶段 =====
+        issue_pc, instr, re = issuer.build(icache)
+        do_stall, metadata = issue_stage.build(
+            instr, issue_pc, rob, rat, rs, mul_rs, lsq, ...
+        )
+
+        # ===== 5. RS Downstream（关键：传递 mul_broadcast）=====
+        for i in range(RS_ENTRY_NUM):
+            rs_downstream[i].build(
+                rs=rs[i], alu=alu[i],
+                cbd_signal=cbd_signal,
+                mul_broadcast=mul_broadcast,  # ← 乘法器广播
+                issue_stall=do_stall,
+                metadata=metadata
+            )
+
+        # ===== 6. MUL_RS Downstream =====
+        for i in range(MUL_RS_NUM):
+            mul_rs_downstream[i].build(
+                rs=mul_rs[i], mul_regs=mul_regs,
+                cbd_signal=cbd_signal,
+                mul_broadcast=mul_broadcast,
+                metadata=metadata
+            )
+
+        # ===== 7. Commit 阶段 =====
+        rob_commit.build(rob, rat, dcache, ...)
+```
+
+## 7.2 数据流图
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              Tomasulo CPU 数据流                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+                                 ┌─────────┐
+                                 │ I-Cache │
+                                 └────┬────┘
+                                      │ instr
+                                      ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                              ISSUE STAGE                                     │
+│  ┌─────────┐    ┌─────────┐    ┌──────────┐                                 │
+│  │ Decoder │───►│   RAT   │───►│ RS/MUL_RS│                                 │
+│  └─────────┘    └─────────┘    │   /LSQ   │                                 │
+│                                └──────────┘                                  │
+│                                      │ 分配 ROB                              │
+│                                      ▼                                       │
+│                                 ┌─────────┐                                  │
+│                                 │   ROB   │                                  │
+│                                 └─────────┘                                  │
+└──────────────────────────────────────────────────────────────────────────────┘
+         │                │                │
+         ▼                ▼                ▼
+    ┌─────────┐      ┌─────────┐      ┌─────────┐
+    │ RS ×4   │      │MUL_RS×2 │      │   LSQ   │
+    └────┬────┘      └────┬────┘      └────┬────┘
+         │                │                │
+    ┌────┴────────────────┴────────────────┴────┐
+    │         操作数就绪时发射到执行单元          │
+    └────┬────────────────┬────────────────┬────┘
+         ▼                ▼                ▼
+    ┌─────────┐      ┌─────────┐      ┌─────────┐
+    │ ALU ×4  │      │   MUL   │      │   LSU   │
+    └────┬────┘      └────┬────┘      └────┬────┘
+         │                │                │
+         │           ┌────┴────┐           │
+         │           │mul_bcast│           │
+         │           └────┬────┘           │
+         ▼                │                ▼
+    ┌─────────┐           │           ┌─────────┐
+    │CDB Arb. │◄──────────┘           │  直接   │
+    │(ALU仲裁)│                       │ 写 ROB  │
+    └────┬────┘                       └────┬────┘
+         │                                 │
+         └────────────────┬────────────────┘
+                          ▼
+    ┌─────────────────────────────────────────────────────────────────────────┐
+    │                            广播到所有 RS                                 │
+    │    cbd_signal (valid, ROB_idx, rd_data)                                 │
+    │    mul_broadcast (mul_rob_idx, mul_rd_data, mul_is_done)                │
+    └─────────────────────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+                     ┌─────────┐
+                     │   ROB   │
+                     │ (Commit)│
+                     └────┬────┘
+                          │
+                          ▼
+                     ┌─────────┐
+                     │   ARF   │  架构寄存器堆
+                     └─────────┘
+```
+
+## 7.3 关键常量配置
+
+| 常量                | 值  | 含义                   |
+| ------------------- | --- | ---------------------- |
+| `FIFO_SIZE`         | 8   | ROB 深度               |
+| `ROB_IDX_WIDTH`     | 3   | ROB 索引位宽 (log2(8)) |
+| `REG_PENDING_WIDTH` | 4   | RAT 标签位宽           |
+| `RS_ENTRY_NUM`      | 4   | 普通 RS 数量           |
+| `MUL_RS_NUM`        | 2   | 乘法 RS 数量           |
+| `MUL_LATENCY`       | 4   | 乘法器延迟周期         |
+
+---
+
+# 8. Downstream 调度机制
+
+## 8.1 组合式 Downstream
+
+Assassyn 框架中，`@downstream.combinational` 标记的方法在每个时钟周期都会被调度执行：
+
+```python
+class RS_downstream(Downstream):
+    @downstream.combinational
+    def build(self, rs, alu, cbd_signal, mul_broadcast, issue_stall, metadata):
+        # 每周期执行一次
+        # metadata 依赖用于确保调度
+        _ = metadata == metadata
+
+        # 监听广播、检测就绪、发射到执行单元
+        ...
+```
+
+## 8.2 调度依赖
+
+为确保 Downstream 每周期都被调度，需要建立数据依赖：
+
+```python
+# metadata 是一个每周期递增的计数器
+metadata = tick_reg[0]
+tick_reg[0] <= tick_reg[0] + UInt(8)(1)
+
+# Downstream 通过依赖 metadata 确保每周期执行
+metadata = metadata.optional(default=UInt(8)(0))
+_ = metadata == metadata  # 人为依赖
+```
+
+## 8.3 广播参数传递
+
+所有 RS Downstream 必须接收相同的广播信号：
+
+```python
+# main.py 中的调用
+
+# 普通 RS —— 必须传递 mul_broadcast！
+for i in range(RS_ENTRY_NUM):
+    rs_downstream[i].build(
+        rs=rs[i],
+        alu=alu[i],
+        cbd_signal=cbd_signal,           # ALU/LSU 结果
+        mul_broadcast=(mul_rob_idx, mul_rd_data, mul_is_done),  # 乘法结果
+        issue_stall=do_stall,
+        metadata=metadata,
+    )
+
+# 乘法 RS
+for i in range(MUL_RS_NUM):
+    mul_rs_downstream[i].build(
+        rs=mul_rs[i],
+        mul_regs=mul_regs,
+        cbd_signal=cbd_signal,
+        mul_broadcast=(mul_rob_idx, mul_rd_data, mul_is_done),
+        metadata=metadata,
+    )
+```
+
+---
+
+# 9. 测试与验证
+
+## 9.1 测试用例
+
+| 测试             | 类型         | 预期             |
+| ---------------- | ------------ | ---------------- |
+| `simple_mul`     | 基础乘法     | 7×8=56           |
+| `multiple`       | 乘加混合     | 乘法结果用于加法 |
+| `vector_mul_100` | 大规模向量乘 | 100 次乘法       |
+
+## 9.2 常见问题
+
+**Q: 为什么 `multiple` 测试会卡住？**
+
+A: 普通 RS 没有监听 `mul_broadcast`，导致等待乘法结果的 ADD 指令永远无法获得操作数。
+
+**修复**: 在 `RS_downstream.build()` 中添加 `mul_broadcast` 参数并处理。
+
+**Q: 乘法器结果为什么不走 CDB？**
+
+A: 当前设计采用多广播总线架构，乘法器有独立的广播通道，避免与 ALU/LSU 竞争仲裁。
