@@ -107,6 +107,26 @@ class CDB_Arbitrator(Downstream):
         alu_is_jal = [alu_cbd[i].is_jal for i in range(RS_ENTRY_NUM)]
         alu_is_B = [alu_cbd[i].is_B for i in range(RS_ENTRY_NUM)]
         alu_branch_taken = [alu_cbd[i].branch_taken for i in range(RS_ENTRY_NUM)]
+        empty_lsu_cbd = LSU_CBD_signal.bundle(
+            ROB_idx = UInt(ROB_IDX_WIDTH)(0),
+            rd_data = UInt(32)(0),
+            valid = Bits(1)(0),
+            is_load = Bits(1)(0),
+            is_store = Bits(1)(0),
+            store_addr = UInt(32)(0),
+            store_data = UInt(32)(0),
+        ).value()
+        empty_alu_cbd = ALU_CBD_signal.bundle(
+            ROB_idx = UInt(ROB_IDX_WIDTH)(0),
+            rd_data = UInt(32)(0),
+            valid = Bits(1)(0),
+            is_branch = Bits(1)(0),
+            next_pc = UInt(32)(0),
+            is_jalr = Bits(1)(0),
+            is_jal = Bits(1)(0),
+            is_B = Bits(1)(0),
+            branch_taken = Bits(1)(0),
+        ).value()
 
         valid = lsu_valid
         for i in range(RS_ENTRY_NUM):
@@ -138,37 +158,21 @@ class CDB_Arbitrator(Downstream):
             with Condition(lsu_valid & lsu_is_store):
                 rob.store_addr[ROB_idx] <= lsu_store_addr
                 rob.store_data[ROB_idx] <= lsu_store_data
-        
-        # 如果这个周期有 req 但是没有被广播出去，则存入寄存器，等待下周期广播
-        with Condition(lsu_req.valid & (select_CDB != Bits(RS_NUM_WIDTH)(0))):
-            lsu_cbd_reg[0] <= lsu_req.value()
+        # 计算下一个周期的缓冲寄存器值，最后只写一次，避免单写口冲突
+        lsu_cbd_next = lsu_cbd_reg[0]
+        lsu_hold_req = lsu_req.valid & (select_CDB != Bits(RS_NUM_WIDTH)(0))
+        lsu_clear_after_broadcast = lsu_valid & (~lsu_req.valid) & (select_CDB == Bits(RS_NUM_WIDTH)(0))
+        lsu_cbd_next = lsu_hold_req.select(lsu_req.value(), lsu_cbd_next)
+        lsu_cbd_next = lsu_clear_after_broadcast.select(empty_lsu_cbd, lsu_cbd_next)
+
+        alu_cbd_next = []
         for i in range(RS_ENTRY_NUM):
-            with Condition(alu_req[i].valid & (select_CDB != Bits(RS_NUM_WIDTH)(ALU_SELECT_BASE + i))):
-                alu_cbd_reg[i][0] <= alu_req[i].value()
-        # 如果这个周期是广播的寄存器的 cbd，那么清空寄存器
-        with Condition(lsu_valid & (~lsu_req.valid) & (select_CDB == Bits(RS_NUM_WIDTH)(0))):
-            lsu_cbd_reg[0] <= LSU_CBD_signal.bundle(
-                ROB_idx = UInt(ROB_IDX_WIDTH)(0),
-                rd_data = UInt(32)(0),
-                valid = Bits(1)(0),
-                is_load = Bits(1)(0),
-                is_store = Bits(1)(0),
-                store_addr = UInt(32)(0),
-                store_data = UInt(32)(0),
-            ).value()
-        for i in range(RS_ENTRY_NUM):
-            with Condition(alu_valid[i] & (~alu_req[i].valid) & (select_CDB == Bits(RS_NUM_WIDTH)(ALU_SELECT_BASE + i))):
-                alu_cbd_reg[i][0] <= ALU_CBD_signal.bundle(
-                    ROB_idx = UInt(ROB_IDX_WIDTH)(0),
-                    rd_data = UInt(32)(0),
-                    valid = Bits(1)(0),
-                    is_branch = Bits(1)(0),
-                    next_pc = UInt(32)(0),
-                    is_jalr = Bits(1)(0),
-                    is_jal = Bits(1)(0),
-                    is_B = Bits(1)(0),
-                    branch_taken = Bits(1)(0),
-                ).value()
+            next_val = alu_cbd_reg[i][0]
+            alu_hold_req = alu_req[i].valid & (select_CDB != Bits(RS_NUM_WIDTH)(ALU_SELECT_BASE + i))
+            alu_clear_after_broadcast = alu_valid[i] & (~alu_req[i].valid) & (select_CDB == Bits(RS_NUM_WIDTH)(ALU_SELECT_BASE + i))
+            next_val = alu_hold_req.select(alu_req[i].value(), next_val)
+            next_val = alu_clear_after_broadcast.select(empty_alu_cbd, next_val)
+            alu_cbd_next.append(next_val)
         
         # ========== 分支控制信号生成 ==========
         # 提取被选中的分支信息（只有 ALU 会产生分支）
@@ -217,6 +221,10 @@ class CDB_Arbitrator(Downstream):
         mispredicted = sel_is_branch & b_mispredicted
         # 正确的 PC：ALU 计算的 next_pc
         correct_pc = sel_next_pc
+
+        # Flush 时直接将缓冲寄存器置零（优先级最高）
+        lsu_cbd_next = mispredicted.select(empty_lsu_cbd, lsu_cbd_next)
+        alu_cbd_next = [mispredicted.select(empty_alu_cbd, alu_cbd_next[i]) for i in range(RS_ENTRY_NUM)]
         
         # ========== 更新 BHT ==========
         # 只有 B 类型条件分支需要更新 BHT
@@ -228,28 +236,12 @@ class CDB_Arbitrator(Downstream):
         # ========== Flush 时清空缓冲寄存器 ==========
         # 当检测到分支预测错误时，清空 CDB 缓冲寄存器，防止旧指令的结果被错误广播
         with Condition(mispredicted):
-            lsu_cbd_reg[0] <= LSU_CBD_signal.bundle(
-                ROB_idx = UInt(ROB_IDX_WIDTH)(0),
-                rd_data = UInt(32)(0),
-                valid = Bits(1)(0),
-                is_load = Bits(1)(0),
-                is_store = Bits(1)(0),
-                store_addr = UInt(32)(0),
-                store_data = UInt(32)(0),
-            ).value()
-            for i in range(RS_ENTRY_NUM):
-                alu_cbd_reg[i][0] <= ALU_CBD_signal.bundle(
-                    ROB_idx = UInt(ROB_IDX_WIDTH)(0),
-                    rd_data = UInt(32)(0),
-                    valid = Bits(1)(0),
-                    is_branch = Bits(1)(0),
-                    next_pc = UInt(32)(0),
-                    is_jalr = Bits(1)(0),
-                    is_jal = Bits(1)(0),
-                    is_B = Bits(1)(0),
-                    branch_taken = Bits(1)(0),
-                ).value()
             log("CDB arb: MISPREDICTION - clearing buffer registers")
+
+        # 写回缓冲寄存器（单写口，每周期仅一次）
+        lsu_cbd_reg[0] <= lsu_cbd_next
+        for i in range(RS_ENTRY_NUM):
+            alu_cbd_reg[i][0] <= alu_cbd_next[i]
         
         # 返回：CBD_signal 和 分支控制信号
         return CBD_signal.bundle(
