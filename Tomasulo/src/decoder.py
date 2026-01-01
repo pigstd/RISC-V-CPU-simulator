@@ -113,8 +113,9 @@ def decoder_logic(inst, reg_pending: Union[RegArray, 'RAT'], regs: RegArray
                is_U.select(Bits(RV32I_ALU.CNT)(1 << RV32I_ALU.ALU_ADD),
                            Bits(RV32I_ALU.CNT)(1 << RV32I_ALU.ALU_NONE)))))))
     # reg_pending 存储 rob_idx+1，0 表示无依赖；避免 0-1 下溢为 0xff 造成数组越界
-    rs1_pending = reg_pending[rs1]
-    rs2_pending = reg_pending[rs2]
+    # RAT 返回 Bits 类型，需要转换为 UInt 进行算术运算
+    rs1_pending = reg_pending[rs1].bitcast(UInt(REG_PENDING_WIDTH))
+    rs2_pending = reg_pending[rs2].bitcast(UInt(REG_PENDING_WIDTH))
     rs1_rob_tag_used = (rs1_pending != UInt(REG_PENDING_WIDTH)(0))
     rs2_rob_tag_used = (rs2_pending != UInt(REG_PENDING_WIDTH)(0))
     rs1_rob_tag = rs1_rob_tag_used.select(
@@ -130,7 +131,7 @@ def decoder_logic(inst, reg_pending: Union[RegArray, 'RAT'], regs: RegArray
         rs1_rob_tag_used.select(
             (cbd.valid & (rs1_rob_tag == cbd.ROB_idx)).select(
                 Bits(1)(1),
-                rob.ready[rs1_rob_tag]
+                rob._read_ready(rs1_rob_tag)
             ),
             Bits(1)(1)
         ), Bits(1)(1))
@@ -138,7 +139,7 @@ def decoder_logic(inst, reg_pending: Union[RegArray, 'RAT'], regs: RegArray
         rs2_rob_tag_used.select(
             (cbd.valid & (rs2_rob_tag == cbd.ROB_idx)).select(
                 Bits(1)(1),
-                rob.ready[rs2_rob_tag]
+                rob._read_ready(rs2_rob_tag)
             ),
             Bits(1)(1)
         ), Bits(1)(1))

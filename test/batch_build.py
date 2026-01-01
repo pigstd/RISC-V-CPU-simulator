@@ -26,6 +26,12 @@ DEFAULT_IDLE_THRESHOLD = 50000
 M_EXTENSION_TESTS = [
     "simple_mul",
     "vector_mul_real",
+    "simple_div",
+    "simple_rem",
+    "div_exact",
+    "div_unsigned",
+    "multiple",
+    "div_rem_combo",
 ]
 # ===========================================
 

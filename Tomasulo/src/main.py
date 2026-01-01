@@ -107,7 +107,7 @@ class IsserImpl(Downstream):
         jalr_stall = Bits(1)(0)
         
         cbd_payload = cbd_signal.value().optional(default=CBD_signal.bundle(
-            ROB_idx=UInt(4)(0),
+            ROB_idx=UInt(ROB_IDX_WIDTH)(0),
             rd_data=UInt(32)(0),
             valid=Bits(1)(0),
         ).value())
@@ -167,32 +167,33 @@ class IsserImpl(Downstream):
                 rob_idx = rob.tail[0]
                 next_tail = ((rob.tail[0] + UInt(ROB_IDX_WIDTH)(1)) & UInt(ROB_IDX_WIDTH)(ROB_MASK)).bitcast(UInt(ROB_IDX_WIDTH))
                 rob.tail[0] <= next_tail
-                rob.busy[rob_idx] <= Bits(1)(1)
-                rob.ready[rob_idx] <= Bits(1)(0)
+                rob._write_busy(rob_idx, Bits(1)(1))
+                rob._write_ready(rob_idx, Bits(1)(0))
                 rob.pc[rob_idx] <= pc_addr
                 rob.dest[rob_idx] <= decoder_result.rd
                 rob.value[rob_idx] <= UInt(32)(0)
-                rob.is_branch[rob_idx] <= decoder_result.is_branch
-                rob.is_syscall[rob_idx] <= decoder_result.is_ecall | decoder_result.is_ebreak
-                rob.is_store[rob_idx] <= decoder_result.mem_write
-                rob.is_jalr[rob_idx] <= decoder_result.is_jalr
+                rob._write_is_branch(rob_idx, decoder_result.is_branch)
+                rob._write_is_syscall(rob_idx, decoder_result.is_ecall | decoder_result.is_ebreak)
+                rob._write_is_store(rob_idx, decoder_result.mem_write)
+                rob._write_is_jalr(rob_idx, decoder_result.is_jalr)
                 
                 # 记录分支预测信息（使用 BHT 预测结果）
                 # JAL：总是预测跳转
                 # B 类型：使用 BHT 预测
                 # JALR：不预测（predicted_taken = 0）
-                rob.predicted_taken[rob_idx] <= predict_taken
+                rob._write_predicted_taken(rob_idx, predict_taken)
                 rob.predicted_pc[rob_idx] <= branch_target
 
                 # 生成源操作数的依赖信息，rat 用 0 表示无依赖，其余存 rob_idx+1
-                qj_raw = decoder_result.rs1_used.select(rat[decoder_result.rs1], Bits(REG_PENDING_WIDTH)(0))
-                qk_raw = decoder_result.rs2_used.select(rat[decoder_result.rs2], Bits(REG_PENDING_WIDTH)(0))
-                qj = (qj_raw != Bits(REG_PENDING_WIDTH)(0)).select(
-                    (qj_raw - Bits(REG_PENDING_WIDTH)(1)).bitcast(Bits(REG_PENDING_WIDTH)),
+                # RAT 返回 Bits 类型，需要转换为 UInt 进行算术运算
+                qj_raw = decoder_result.rs1_used.select(rat[decoder_result.rs1], Bits(REG_PENDING_WIDTH)(0)).bitcast(UInt(REG_PENDING_WIDTH))
+                qk_raw = decoder_result.rs2_used.select(rat[decoder_result.rs2], Bits(REG_PENDING_WIDTH)(0)).bitcast(UInt(REG_PENDING_WIDTH))
+                qj = (qj_raw != UInt(REG_PENDING_WIDTH)(0)).select(
+                    (qj_raw - UInt(REG_PENDING_WIDTH)(1)).bitcast(Bits(REG_PENDING_WIDTH)),
                     Bits(REG_PENDING_WIDTH)(0)
                 )
-                qk = (qk_raw != Bits(REG_PENDING_WIDTH)(0)).select(
-                    (qk_raw - Bits(REG_PENDING_WIDTH)(1)).bitcast(Bits(REG_PENDING_WIDTH)),
+                qk = (qk_raw != UInt(REG_PENDING_WIDTH)(0)).select(
+                    (qk_raw - UInt(REG_PENDING_WIDTH)(1)).bitcast(Bits(REG_PENDING_WIDTH)),
                     Bits(REG_PENDING_WIDTH)(0)
                 )
                 rs1_val = decoder_result.rs1_value
@@ -212,7 +213,7 @@ class IsserImpl(Downstream):
                     lsq.busy[0] <= Bits(1)(1)
                     lsq.is_load[0] <= decoder_result.mem_read
                     lsq.is_store[0] <= decoder_result.mem_write
-                    lsq.rob_idx[0] <= rob_idx.zext(Bits(4))
+                    lsq.rob_idx[0] <= rob_idx.zext(Bits(ROB_IDX_WIDTH))
                     lsq.rd[0] <= decoder_result.rd
                     lsq.qj[0] <= qj
                     lsq.qk[0] <= qk
@@ -254,7 +255,7 @@ class IsserImpl(Downstream):
                             rs[i].qj_valid[0] <= qj_valid
                             rs[i].qk_valid[0] <= qk_valid
                             rs[i].rd[0] <= decoder_result.rd
-                            rs[i].rob_idx[0] <= rob_idx.zext(Bits(4))
+                            rs[i].rob_idx[0] <= rob_idx.zext(Bits(ROB_IDX_WIDTH))
                             rs[i].imm[0] <= decoder_result.imm.bitcast(UInt(32))
                             rs[i].is_branch[0] <= decoder_result.is_branch
                             rs[i].is_B[0] <= decoder_result.is_B  # 条件分支 B 类型
@@ -283,7 +284,7 @@ class IsserImpl(Downstream):
                             mul_rs[i].qj_valid[0] <= qj_valid
                             mul_rs[i].qk_valid[0] <= qk_valid
                             mul_rs[i].rd[0] <= decoder_result.rd
-                            mul_rs[i].rob_idx[0] <= rob_idx.zext(Bits(4))
+                            mul_rs[i].rob_idx[0] <= rob_idx.zext(Bits(ROB_IDX_WIDTH))
 
             stall_pc = pc_addr
         
@@ -460,7 +461,7 @@ class Driver(Module):
     @module.combinational
     def build(self, fetcher : Fetcher, committer : Commiter):
         is_init = RegArray(UInt(1), 1, initializer=[1])
-        tick_reg = RegArray(Bits(8), 1, initializer=[0])
+        tick_reg = RegArray(UInt(8), 1, initializer=[0])
         with Condition(is_init[0] == UInt(1)(1)):
             is_init[0] <= UInt(1)(0)
             fetcher.async_called()
@@ -470,7 +471,7 @@ class Driver(Module):
             fetcher.async_called()
         committer.async_called()
         # heartbeat 翻转，驱动 CDB 下游每周期触发
-        tick_reg[0] <= tick_reg[0] + Bits(8)(1)
+        tick_reg[0] <= tick_reg[0] + UInt(8)(1)
         return tick_reg[0]
 
 
@@ -492,7 +493,7 @@ class FlushControl(Downstream):
               lsq: LSQEntry,
               metadata: Value):
         do_flush = do_flush.optional(default=Bits(1)(0))
-        metadata = metadata.optional(default=Bits(8)(0))
+        metadata = metadata.optional(default=UInt(8)(0))
         _ = metadata == metadata  # 确保每周期触发
         
         with Condition(do_flush):

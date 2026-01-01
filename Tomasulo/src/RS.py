@@ -1,6 +1,7 @@
 from assassyn.frontend import *
 # 直接复用 ALU 模块里定义的 ALU_signal 记录类型
 from .alu import ALU, ALU_signal
+from .ROB import ROB_IDX_WIDTH, REG_PENDING_WIDTH
 try:
     from .instruction import RV32I_ALU
 except ImportError:
@@ -21,13 +22,13 @@ class RSEntry:
         # 操作数值与来源
         self.vj = RegArray(UInt(32), 1, initializer=[0])
         self.vk = RegArray(UInt(32), 1, initializer=[0])
-        self.qj = RegArray(Bits(4), 1, initializer=[0])           # 源操作数的标签（ROB idx），0 表示就绪
-        self.qk = RegArray(Bits(4), 1, initializer=[0])
+        self.qj = RegArray(Bits(REG_PENDING_WIDTH), 1, initializer=[0])           # 源操作数的标签（ROB idx），0 表示就绪
+        self.qk = RegArray(Bits(REG_PENDING_WIDTH), 1, initializer=[0])
         self.qj_valid = RegArray(Bits(1), 1, initializer=[0])     # 标记 vj/vk 是否有效
         self.qk_valid = RegArray(Bits(1), 1, initializer=[0])
         # 目标寄存器 / ROB
         self.rd = RegArray(Bits(5), 1, initializer=[0])
-        self.rob_idx = RegArray(Bits(4), 1, initializer=[0])
+        self.rob_idx = RegArray(Bits(ROB_IDX_WIDTH), 1, initializer=[0])
         # 立即数等额外字段
         self.imm = RegArray(UInt(32), 1, initializer=[0])
         # 分支/JAL/JALR 控制
@@ -56,7 +57,7 @@ class RS_downstream(Downstream):
               metadata: Value):
         # 依赖 Issuer 的输出，保证在有发射动作时也会调度 RS_downstream
         issue_stall = issue_stall.optional(default=Bits(1)(0))
-        metadata = metadata.optional(default=Bits(8)(0))
+        metadata = metadata.optional(default=UInt(8)(0))
         # 人为依赖 metadata，确保每周期都触发一次（即使上游无事件）
         _ = metadata == metadata
         log("RS downstream metadata={} busy={} qj_v={} qk_v={} rob_idx={} op={:014b}", metadata, rs.busy[0], rs.qj_valid[0], rs.qk_valid[0], rs.rob_idx[0], rs.op[0])

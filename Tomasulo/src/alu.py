@@ -1,8 +1,10 @@
 from assassyn.frontend import *
 try:
     from .instruction import *
+    from .ROB import ROB_IDX_WIDTH
 except ImportError:
     from Tomasulo.src.instruction import *
+    from Tomasulo.src.ROB import ROB_IDX_WIDTH
 
 # 全局配置 - 数据段基地址（默认 0x2000）
 # 可通过 executor.DATA_BASE_OFFSET = xxx 在外部设置
@@ -17,11 +19,11 @@ ALU_signal = Record(
     is_jalr = Bits(1),# 是否 JALR 指令
     pc_addr = UInt(32),   # 当前指令 PC 地址
     imm_val = UInt(32),   # 立即数
-    ROB_idx = UInt(4),    # 指令在 ROB 中的索引
+    ROB_idx = UInt(ROB_IDX_WIDTH),    # 指令在 ROB 中的索引
 )
 
 ALU_CBD_signal = Record(
-    ROB_idx = UInt(4),    # 指令在 ROB 中的索引
+    ROB_idx = UInt(ROB_IDX_WIDTH),    # 指令在 ROB 中的索引
     rd_data = UInt(32),   # 写回数据
     valid = Bits(1),     # 数据有效标志
     is_branch = Bits(1),  # 是否分支指令

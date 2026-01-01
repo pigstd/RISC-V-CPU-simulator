@@ -56,16 +56,16 @@ class BHT:
         taken=0: 计数器-1（饱和到0）
         """
         idx = self.get_index(pc)
-        old_val = self.counters[idx]
-        # 饱和加减
+        old_val = self.counters[idx].bitcast(UInt(2))
+        # 饱和加减 - 使用 UInt 进行算术运算
         new_val = taken.select(
             # taken: +1, 饱和到 3
-            (old_val == Bits(2)(3)).select(Bits(2)(3), old_val + Bits(2)(1)),
+            (old_val == UInt(2)(3)).select(UInt(2)(3), old_val + UInt(2)(1)),
             # not taken: -1, 饱和到 0
-            (old_val == Bits(2)(0)).select(Bits(2)(0), old_val - Bits(2)(1))
+            (old_val == UInt(2)(0)).select(UInt(2)(0), old_val - UInt(2)(1))
         )
         with Condition(cond):
-            self.counters[idx] <= new_val
+            self.counters[idx] <= new_val.bitcast(Bits(2))
 
 
 # RAT: 32个独立的RegArray，支持同周期flush
@@ -130,58 +130,153 @@ class RAT:
 
 
 # ROB: 按字段分布式存储为寄存器队列，同时维护头尾指针
+# 需要在 flush 时清空的字段使用独立 RegArray 列表，避免动态/静态索引冲突
 class ROB:
     def __init__(self):
         # 环形队列指针
         self.head = RegArray(UInt(ROB_IDX_WIDTH), 1, initializer=[0])
         self.tail = RegArray(UInt(ROB_IDX_WIDTH), 1, initializer=[0])
 
-        # 各字段的寄存器队列
-        self.busy = RegArray(Bits(1), FIFO_SIZE, initializer=[0] * FIFO_SIZE)
-        self.ready = RegArray(Bits(1), FIFO_SIZE, initializer=[0] * FIFO_SIZE)
+        # ========== 需要在 flush 时清空的字段：使用独立 RegArray 列表 ==========
+        # 这样可以在 flush 时用静态索引写入，在其他时候用动态索引写入，互不冲突
+        self.busy = [RegArray(Bits(1), 1, initializer=[0]) for _ in range(FIFO_SIZE)]
+        self.ready = [RegArray(Bits(1), 1, initializer=[0]) for _ in range(FIFO_SIZE)]
+        self.is_branch = [RegArray(Bits(1), 1, initializer=[0]) for _ in range(FIFO_SIZE)]
+        self.is_syscall = [RegArray(Bits(1), 1, initializer=[0]) for _ in range(FIFO_SIZE)]
+        self.is_store = [RegArray(Bits(1), 1, initializer=[0]) for _ in range(FIFO_SIZE)]
+        self.is_jalr = [RegArray(Bits(1), 1, initializer=[0]) for _ in range(FIFO_SIZE)]
+        self.predicted_taken = [RegArray(Bits(1), 1, initializer=[0]) for _ in range(FIFO_SIZE)]
+        
+        # ========== 不需要在 flush 时清空的字段：保持单个 RegArray ==========
+        # 这些字段只在分配或更新时用动态索引写入，不会冲突
         self.dest = RegArray(Bits(5), FIFO_SIZE, initializer=[0] * FIFO_SIZE)
         self.value = RegArray(UInt(32), FIFO_SIZE, initializer=[0] * FIFO_SIZE)
-        self.is_branch = RegArray(Bits(1), FIFO_SIZE, initializer=[0] * FIFO_SIZE)
         self.pc = RegArray(UInt(32), FIFO_SIZE, initializer=[0] * FIFO_SIZE)
-        self.is_syscall = RegArray(Bits(1), FIFO_SIZE, initializer=[0] * FIFO_SIZE)
-        self.is_store = RegArray(Bits(1), FIFO_SIZE, initializer=[0] * FIFO_SIZE)
         # store 专用字段：地址与数据
         self.store_addr = RegArray(UInt(32), FIFO_SIZE, initializer=[0] * FIFO_SIZE)
         self.store_data = RegArray(UInt(32), FIFO_SIZE, initializer=[0] * FIFO_SIZE)
-        
         # 分支预测相关字段
-        self.predicted_taken = RegArray(Bits(1), FIFO_SIZE, initializer=[0] * FIFO_SIZE)
         self.predicted_pc = RegArray(UInt(32), FIFO_SIZE, initializer=[0] * FIFO_SIZE)
-        # is_jalr 标记，JALR不预测，需要特殊处理
-        self.is_jalr = RegArray(Bits(1), FIFO_SIZE, initializer=[0] * FIFO_SIZE)
+    def _read_busy(self, idx: Value) -> Value:
+        """辅助方法：通过动态索引读取 busy"""
+        result = Bits(1)(0)
+        for i in range(FIFO_SIZE):
+            result = (idx == UInt(ROB_IDX_WIDTH)(i)).select(self.busy[i][0], result)
+        return result
+    
+    def _read_ready(self, idx: Value) -> Value:
+        """辅助方法：通过动态索引读取 ready"""
+        result = Bits(1)(0)
+        for i in range(FIFO_SIZE):
+            result = (idx == UInt(ROB_IDX_WIDTH)(i)).select(self.ready[i][0], result)
+        return result
+    
+    def _read_is_branch(self, idx: Value) -> Value:
+        """辅助方法：通过动态索引读取 is_branch"""
+        result = Bits(1)(0)
+        for i in range(FIFO_SIZE):
+            result = (idx == UInt(ROB_IDX_WIDTH)(i)).select(self.is_branch[i][0], result)
+        return result
+    
+    def _read_is_syscall(self, idx: Value) -> Value:
+        """辅助方法：通过动态索引读取 is_syscall"""
+        result = Bits(1)(0)
+        for i in range(FIFO_SIZE):
+            result = (idx == UInt(ROB_IDX_WIDTH)(i)).select(self.is_syscall[i][0], result)
+        return result
+    
+    def _read_is_store(self, idx: Value) -> Value:
+        """辅助方法：通过动态索引读取 is_store"""
+        result = Bits(1)(0)
+        for i in range(FIFO_SIZE):
+            result = (idx == UInt(ROB_IDX_WIDTH)(i)).select(self.is_store[i][0], result)
+        return result
+    
+    def _read_is_jalr(self, idx: Value) -> Value:
+        """辅助方法：通过动态索引读取 is_jalr"""
+        result = Bits(1)(0)
+        for i in range(FIFO_SIZE):
+            result = (idx == UInt(ROB_IDX_WIDTH)(i)).select(self.is_jalr[i][0], result)
+        return result
+    
+    def _read_predicted_taken(self, idx: Value) -> Value:
+        """辅助方法：通过动态索引读取 predicted_taken"""
+        result = Bits(1)(0)
+        for i in range(FIFO_SIZE):
+            result = (idx == UInt(ROB_IDX_WIDTH)(i)).select(self.predicted_taken[i][0], result)
+        return result
+    
+    def _write_busy(self, idx: Value, val: Value):
+        """辅助方法：通过动态索引写入 busy"""
+        for i in range(FIFO_SIZE):
+            with Condition(idx == UInt(ROB_IDX_WIDTH)(i)):
+                self.busy[i][0] <= val
+    
+    def _write_ready(self, idx: Value, val: Value):
+        """辅助方法：通过动态索引写入 ready"""
+        for i in range(FIFO_SIZE):
+            with Condition(idx == UInt(ROB_IDX_WIDTH)(i)):
+                self.ready[i][0] <= val
+    
+    def _write_is_branch(self, idx: Value, val: Value):
+        """辅助方法：通过动态索引写入 is_branch"""
+        for i in range(FIFO_SIZE):
+            with Condition(idx == UInt(ROB_IDX_WIDTH)(i)):
+                self.is_branch[i][0] <= val
+    
+    def _write_is_syscall(self, idx: Value, val: Value):
+        """辅助方法：通过动态索引写入 is_syscall"""
+        for i in range(FIFO_SIZE):
+            with Condition(idx == UInt(ROB_IDX_WIDTH)(i)):
+                self.is_syscall[i][0] <= val
+    
+    def _write_is_store(self, idx: Value, val: Value):
+        """辅助方法：通过动态索引写入 is_store"""
+        for i in range(FIFO_SIZE):
+            with Condition(idx == UInt(ROB_IDX_WIDTH)(i)):
+                self.is_store[i][0] <= val
+    
+    def _write_is_jalr(self, idx: Value, val: Value):
+        """辅助方法：通过动态索引写入 is_jalr"""
+        for i in range(FIFO_SIZE):
+            with Condition(idx == UInt(ROB_IDX_WIDTH)(i)):
+                self.is_jalr[i][0] <= val
+    
+    def _write_predicted_taken(self, idx: Value, val: Value):
+        """辅助方法：通过动态索引写入 predicted_taken"""
+        for i in range(FIFO_SIZE):
+            with Condition(idx == UInt(ROB_IDX_WIDTH)(i)):
+                self.predicted_taken[i][0] <= val
+
     def is_full(self) -> Bits:
         """
         判断 ROB 是否已满：next_tail 与 head 重合且 head 位置忙。
         """
         next_tail = (self.tail[0] + UInt(ROB_IDX_WIDTH)(1)).bitcast(UInt(ROB_IDX_WIDTH))
-        return (next_tail == self.head[0]) & self.busy[self.head[0]]
+        return (next_tail == self.head[0]) & self._read_busy(self.head[0])
     def has_no_store(self) -> Bits:
         """
         ROB 内没有待提交的 store：枚举所有 entry 的 is_store 取反求与。
         """
         no_store = Bits(1)(1)
         for i in range(FIFO_SIZE):
-            no_store = no_store & ~self.is_store[i]
+            no_store = no_store & ~self.is_store[i][0]
         return no_store
     
     def flush(self):
         """
         Flush ROB：重置tail到head，清空所有busy位
         用于分支预测失败时的恢复
+        使用独立 RegArray 列表，每个寄存器只写一次，符合 Assassyn 设计理念
         """
         # 重置tail指针到head
         self.tail[0] <= self.head[0]
-        # 清空所有entry的busy位（保留head处如果正在commit）
+        # 清空所有entry的相关位（每个独立 RegArray 只写一次）
         for i in range(FIFO_SIZE):
-            self.busy[i] <= Bits(1)(0)
-            self.ready[i] <= Bits(1)(0)
-            self.is_branch[i] <= Bits(1)(0)
-            self.is_syscall[i] <= Bits(1)(0)
-            self.is_store[i] <= Bits(1)(0)
-            self.is_jalr[i] <= Bits(1)(0)
-            self.predicted_taken[i] <= Bits(1)(0)
+            self.busy[i][0] <= Bits(1)(0)
+            self.ready[i][0] <= Bits(1)(0)
+            self.is_branch[i][0] <= Bits(1)(0)
+            self.is_syscall[i][0] <= Bits(1)(0)
+            self.is_store[i][0] <= Bits(1)(0)
+            self.is_jalr[i][0] <= Bits(1)(0)
+            self.predicted_taken[i][0] <= Bits(1)(0)

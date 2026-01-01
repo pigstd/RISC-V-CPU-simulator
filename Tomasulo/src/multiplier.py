@@ -7,9 +7,11 @@ from assassyn.frontend import *
 try:
     from .instruction import RV32I_ALU
     from .signals import MUL_CBD_signal
+    from .ROB import ROB_IDX_WIDTH, REG_PENDING_WIDTH
 except ImportError:
     from Tomasulo.src.instruction import RV32I_ALU
     from Tomasulo.src.signals import MUL_CBD_signal
+    from Tomasulo.src.ROB import ROB_IDX_WIDTH, REG_PENDING_WIDTH
 
 # 乘法器周期数
 MUL_LATENCY = 4
@@ -22,7 +24,7 @@ MUL_signal = Record(
     op1_val = UInt(32),    # 操作数 1
     op2_val = UInt(32),    # 操作数 2
     alu_type = Bits(RV32I_ALU.CNT),  # 乘法类型 (MUL/MULH/MULHSU/MULHU)
-    ROB_idx = UInt(4),     # ROB 索引
+    ROB_idx = UInt(ROB_IDX_WIDTH),     # ROB 索引
 )
 
 
@@ -33,7 +35,7 @@ class MultiplierRegs:
         self.op1 = RegArray(UInt(32), 1, initializer=[0])   # 操作数 1
         self.op2 = RegArray(UInt(32), 1, initializer=[0])   # 操作数 2
         self.alu_type = RegArray(Bits(RV32I_ALU.CNT), 1, initializer=[0])  # 乘法类型
-        self.rob_idx = RegArray(UInt(4), 1, initializer=[0])  # ROB 索引
+        self.rob_idx = RegArray(UInt(ROB_IDX_WIDTH), 1, initializer=[0])  # ROB 索引
         self.pending = RegArray(Bits(1), 1, initializer=[0])  # 是否有待处理的请求
 
 
@@ -58,7 +60,7 @@ class MultiplierState(Downstream):
         rob: ROB 实例
         metadata: Driver 的 tick
         """
-        metadata = metadata.optional(default=Bits(8)(0))
+        metadata = metadata.optional(default=UInt(8)(0))
         _ = metadata == metadata  # 确保每周期触发
         
         # 读取状态
@@ -97,7 +99,7 @@ class MultiplierState(Downstream):
             # DONE 状态：输出结果，回到 IDLE
             mul_regs.cycle_cnt[0] <= UInt(4)(0)
             # 直接写入 ROB
-            rob.ready[rob_idx] <= Bits(1)(1)
+            rob._write_ready(rob_idx, Bits(1)(1))
             rob.value[rob_idx] <= mul_result
             log("MulState: done, result=0x{:08x} rob_idx={}, wrote to ROB", mul_result, rob_idx)
         
@@ -138,7 +140,7 @@ class MultiplierState(Downstream):
             # DONE 状态：输出结果，回到 IDLE
             cycle_cnt[0] <= UInt(4)(0)
             # 直接写入 ROB
-            rob.ready[rob_idx_reg[0]] <= Bits(1)(1)
+            rob._write_ready(rob_idx_reg[0], Bits(1)(1))
             rob.value[rob_idx_reg[0]] <= mul_result
             log("MulState: done, result=0x{:08x} rob_idx={}, wrote to ROB", mul_result, rob_idx_reg[0])
         
@@ -154,12 +156,12 @@ class MUL_RSEntry:
         self.op = RegArray(Bits(RV32I_ALU.CNT), 1, initializer=[0])  # 乘法类型
         self.vj = RegArray(UInt(32), 1, initializer=[0])  # 操作数 1
         self.vk = RegArray(UInt(32), 1, initializer=[0])  # 操作数 2
-        self.qj = RegArray(Bits(4), 1, initializer=[0])   # 源 1 ROB 标签
-        self.qk = RegArray(Bits(4), 1, initializer=[0])   # 源 2 ROB 标签
+        self.qj = RegArray(Bits(REG_PENDING_WIDTH), 1, initializer=[0])   # 源 1 ROB 标签
+        self.qk = RegArray(Bits(REG_PENDING_WIDTH), 1, initializer=[0])   # 源 2 ROB 标签
         self.qj_valid = RegArray(Bits(1), 1, initializer=[0])  # 源 1 就绪
         self.qk_valid = RegArray(Bits(1), 1, initializer=[0])  # 源 2 就绪
         self.rd = RegArray(Bits(5), 1, initializer=[0])
-        self.rob_idx = RegArray(Bits(4), 1, initializer=[0])
+        self.rob_idx = RegArray(Bits(ROB_IDX_WIDTH), 1, initializer=[0])
         self.fired = RegArray(Bits(1), 1, initializer=[0])  # 是否已发射
 
 
@@ -182,12 +184,12 @@ class MUL_RS_downstream(Downstream):
         """
         from .arbitrator import CBD_signal
         
-        metadata = metadata.optional(default=Bits(8)(0))
+        metadata = metadata.optional(default=UInt(8)(0))
         _ = metadata == metadata  # 确保每周期触发
         
         # 解包乘法器广播信号，使用 optional 防止无效值
         mul_rob_idx, mul_rd_data, mul_is_done = mul_broadcast
-        mul_rob_idx = mul_rob_idx.optional(default=UInt(4)(0))
+        mul_rob_idx = mul_rob_idx.optional(default=UInt(ROB_IDX_WIDTH)(0))
         mul_rd_data = mul_rd_data.optional(default=UInt(32)(0))
         mul_is_done = mul_is_done.optional(default=Bits(1)(0))
         
@@ -246,7 +248,7 @@ class MUL_RS_downstream(Downstream):
             mul_regs.op1[0] <= rs.vj[0]
             mul_regs.op2[0] <= rs.vk[0]
             mul_regs.alu_type[0] <= rs.op[0]
-            mul_regs.rob_idx[0] <= rs.rob_idx[0].bitcast(UInt(4))  # 转换类型
+            mul_regs.rob_idx[0] <= rs.rob_idx[0].bitcast(UInt(ROB_IDX_WIDTH))  # 转换类型
             mul_regs.pending[0] <= Bits(1)(1)  # 标记有待处理的请求
             rs.fired[0] <= Bits(1)(1)
         

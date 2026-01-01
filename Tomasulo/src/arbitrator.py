@@ -5,7 +5,7 @@ from .ROB import *
 from .RS import RS_ENTRY_NUM, RS_NUM_WIDTH, RS_MAX
 
 CBD_signal = Record(
-    ROB_idx = UInt(4),    # 指令在 ROB 中的索引
+    ROB_idx = UInt(ROB_IDX_WIDTH),    # 指令在 ROB 中的索引
     rd_data = UInt(32),   # 写回数据
     valid = Bits(1),     # 数据有效标志
 )
@@ -29,12 +29,13 @@ class CDB_Arbitrator(Downstream):
         lsu_cbd_reg = RegArray(Bits(LSU_CBD_signal.bits), 1, initializer=[0])
         alu_cbd_reg = [RegArray(Bits(ALU_CBD_signal.bits), 1, initializer=[0]) for _ in range(RS_ENTRY_NUM)]
         # metadata 仅用于驱动 downstream，每周期都会访问一次
-        metadata = metadata.optional(default=Bits(8)(0))
+        metadata = metadata.optional(default=UInt(8)(0))
         log("CDB arb metadata={}", metadata)
+        
         # 为输入 request 增加默认值，避免第一次未产生请求时访问无效字段
         # 给上下游提供安全的默认值（当 LSU/ALU 尚未产生输出时不会访问无效 Option）
         lsu_payload = LSU_CBD_req.value().optional(default=LSU_CBD_signal.bundle(
-            ROB_idx = UInt(4)(0),
+            ROB_idx = UInt(ROB_IDX_WIDTH)(0),
             rd_data = UInt(32)(0),
             valid = Bits(1)(0),
             is_load = Bits(1)(0),
@@ -47,7 +48,7 @@ class CDB_Arbitrator(Downstream):
         alu_req = []
         for i in range(RS_ENTRY_NUM):
             alu_payload = ALU_CBD_req[i].value().optional(default=ALU_CBD_signal.bundle(
-                ROB_idx = UInt(4)(0),
+                ROB_idx = UInt(ROB_IDX_WIDTH)(0),
                 rd_data = UInt(32)(0),
                 valid = Bits(1)(0),
                 is_branch = Bits(1)(0),
@@ -120,7 +121,7 @@ class CDB_Arbitrator(Downstream):
             select_CDB = (alu_valid[i] & (select_CDB == Bits(RS_NUM_WIDTH)(RS_MAX))).select(Bits(RS_NUM_WIDTH)(ALU_SELECT_BASE + i), select_CDB)
 
         # 选择 ROB_idx
-        ROB_idx = lsu_valid.select(lsu_rob_idx, UInt(4)(0))
+        ROB_idx = lsu_valid.select(lsu_rob_idx, UInt(ROB_IDX_WIDTH)(0))
         for i in range(RS_ENTRY_NUM):
             ROB_idx = (alu_valid[i] & (select_CDB == Bits(RS_NUM_WIDTH)(ALU_SELECT_BASE + i))).select(alu_rob_idx[i], ROB_idx)
         
@@ -131,7 +132,7 @@ class CDB_Arbitrator(Downstream):
         log("CDB arb: LSU_valid={} select_CDB={} sel_rob_idx={} rd_data=0x{:08x}", lsu_valid, select_CDB, ROB_idx, rd_data)
         # 将选择的结果修改进 ROB
         with Condition(valid):
-            rob.ready[ROB_idx] <= Bits(1)(1)
+            rob._write_ready(ROB_idx, Bits(1)(1))
             rob.value[ROB_idx] <= rd_data
             # 若为 store，记录地址与数据（is_store 在 issue 时写入）
             with Condition(lsu_valid & lsu_is_store):
@@ -147,7 +148,7 @@ class CDB_Arbitrator(Downstream):
         # 如果这个周期是广播的寄存器的 cbd，那么清空寄存器
         with Condition(lsu_valid & (~lsu_req.valid) & (select_CDB == Bits(RS_NUM_WIDTH)(0))):
             lsu_cbd_reg[0] <= LSU_CBD_signal.bundle(
-                ROB_idx = UInt(4)(0),
+                ROB_idx = UInt(ROB_IDX_WIDTH)(0),
                 rd_data = UInt(32)(0),
                 valid = Bits(1)(0),
                 is_load = Bits(1)(0),
@@ -158,7 +159,7 @@ class CDB_Arbitrator(Downstream):
         for i in range(RS_ENTRY_NUM):
             with Condition(alu_valid[i] & (~alu_req[i].valid) & (select_CDB == Bits(RS_NUM_WIDTH)(ALU_SELECT_BASE + i))):
                 alu_cbd_reg[i][0] <= ALU_CBD_signal.bundle(
-                    ROB_idx = UInt(4)(0),
+                    ROB_idx = UInt(ROB_IDX_WIDTH)(0),
                     rd_data = UInt(32)(0),
                     valid = Bits(1)(0),
                     is_branch = Bits(1)(0),
@@ -177,7 +178,7 @@ class CDB_Arbitrator(Downstream):
         sel_is_B = Bits(1)(0)
         sel_branch_taken = Bits(1)(0)
         sel_next_pc = UInt(32)(0)
-        sel_rob_idx_for_branch = UInt(4)(0)
+        sel_rob_idx_for_branch = UInt(ROB_IDX_WIDTH)(0)
         
         for i in range(RS_ENTRY_NUM):
             is_selected = alu_valid[i] & (select_CDB == Bits(RS_NUM_WIDTH)(ALU_SELECT_BASE + i))
@@ -191,7 +192,7 @@ class CDB_Arbitrator(Downstream):
         
         # 分支验证：检查 ROB 中记录的预测是否正确
         # 预测信息存储在 ROB 中：predicted_taken, predicted_pc
-        predicted_taken = rob.predicted_taken[sel_rob_idx_for_branch]
+        predicted_taken = rob._read_predicted_taken(sel_rob_idx_for_branch)
         predicted_pc = rob.predicted_pc[sel_rob_idx_for_branch]
         branch_pc = rob.pc[sel_rob_idx_for_branch]  # 分支指令的 PC，用于更新 BHT
         
@@ -223,6 +224,32 @@ class CDB_Arbitrator(Downstream):
         
         log("CDB branch: is_branch={} is_B={} branch_taken={} predicted={} mispred={} pc=0x{:08x}", 
             sel_is_branch, sel_is_B, sel_branch_taken, predicted_taken, mispredicted, branch_pc)
+        
+        # ========== Flush 时清空缓冲寄存器 ==========
+        # 当检测到分支预测错误时，清空 CDB 缓冲寄存器，防止旧指令的结果被错误广播
+        with Condition(mispredicted):
+            lsu_cbd_reg[0] <= LSU_CBD_signal.bundle(
+                ROB_idx = UInt(ROB_IDX_WIDTH)(0),
+                rd_data = UInt(32)(0),
+                valid = Bits(1)(0),
+                is_load = Bits(1)(0),
+                is_store = Bits(1)(0),
+                store_addr = UInt(32)(0),
+                store_data = UInt(32)(0),
+            ).value()
+            for i in range(RS_ENTRY_NUM):
+                alu_cbd_reg[i][0] <= ALU_CBD_signal.bundle(
+                    ROB_idx = UInt(ROB_IDX_WIDTH)(0),
+                    rd_data = UInt(32)(0),
+                    valid = Bits(1)(0),
+                    is_branch = Bits(1)(0),
+                    next_pc = UInt(32)(0),
+                    is_jalr = Bits(1)(0),
+                    is_jal = Bits(1)(0),
+                    is_B = Bits(1)(0),
+                    branch_taken = Bits(1)(0),
+                ).value()
+            log("CDB arb: MISPREDICTION - clearing buffer registers")
         
         # 返回：CBD_signal 和 分支控制信号
         return CBD_signal.bundle(
