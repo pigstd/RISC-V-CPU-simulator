@@ -100,7 +100,17 @@ class RS_downstream(Downstream):
         with Condition((busy_flag == Bits(1)(1)) & ~(rs.qj_valid[0] & rs.qk_valid[0])):
             log("RS waiting rob_idx={} qj_valid={} qk_valid={} qj={} qk={}", rs.rob_idx[0], rs.qj_valid[0], rs.qk_valid[0], rs.qj[0], rs.qk[0])
         with Condition((busy_flag == Bits(1)(1)) & (rs.qj_valid[0] & rs.qk_valid[0]) & (rs.fired[0] == Bits(1)(0))):
-            log("RS fire ALU: rob_idx={} op1=0x{:08x} op2=0x{:08x} op={:014b}", rs.rob_idx[0], rs.vj[0], rs.vk[0], rs.op[0])
+            log(
+                "RS fire ALU: rob_idx={} op1=0x{:08x} op2=0x{:08x} op={:014b} qj={} qk={} qj_v={} qk_v={}",
+                rs.rob_idx[0],
+                rs.vj[0],
+                rs.vk[0],
+                rs.op[0],
+                rs.qj[0],
+                rs.qk[0],
+                rs.qj_valid[0],
+                rs.qk_valid[0],
+            )
             alu.async_called(
                 alu_signals=ALU_signal.bundle(
                     op1_val = rs.vj[0],

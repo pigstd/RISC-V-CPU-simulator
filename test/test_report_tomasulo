@@ -1,4 +1,4 @@
 Test Name            Status   Cycles   Instrs Branches  Mispred   Acc% Message
 ------------------------------------------------------------------------------
-fib                  FAIL        366      154       12        1   91.7 verilator a0 mismatch: got 11, expected 55
+array_sum            FAIL        249      117        7        1   85.7 verilator a0 mismatch: got 10, expected 210
 Summary: 0/1 passed, 1 failed

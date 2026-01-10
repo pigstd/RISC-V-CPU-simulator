@@ -166,6 +166,8 @@ class IsserImpl(Downstream):
             with Condition(~stall):
                 rob_idx = rob.tail[0]
                 next_tail = ((rob.tail[0] + UInt(ROB_IDX_WIDTH)(1)) & UInt(ROB_IDX_WIDTH)(ROB_MASK)).bitcast(UInt(ROB_IDX_WIDTH))
+                # reg_pending 用 rob_idx+1 表示，0 作为 sentinel
+                rob_tag_plus1 = (rob_idx.zext(UInt(REG_PENDING_WIDTH)) + UInt(REG_PENDING_WIDTH)(1)).bitcast(Bits(REG_PENDING_WIDTH))
                 rob.tail[0] <= next_tail
                 rob._write_busy(rob_idx, Bits(1)(1))
                 rob._write_ready(rob_idx, Bits(1)(0))
@@ -200,13 +202,51 @@ class IsserImpl(Downstream):
                 rs2_val = decoder_result.rs2_value
                 qj_valid = decoder_result.rs1_valid
                 qk_valid = decoder_result.rs2_valid
+                log(
+                    "issue operands: pc=0x{:08x} rob_idx={} rs1={} val=0x{:08x} qj_raw={} qj_valid={} rs2={} val=0x{:08x} qk_raw={} qk_valid={}",
+                    pc_addr,
+                    rob_idx,
+                    decoder_result.rs1,
+                    rs1_val,
+                    qj_raw,
+                    qj_valid,
+                    decoder_result.rs2,
+                    rs2_val,
+                    qk_raw,
+                    qk_valid,
+                )
+                log(
+                    "issue dep: pc=0x{:08x} rd={} rs1={} rs2={} qj_raw={} qk_raw={} rat_rs1={} rat_rs2={}",
+                    pc_addr,
+                    decoder_result.rd,
+                    decoder_result.rs1,
+                    decoder_result.rs2,
+                    qj_raw,
+                    qk_raw,
+                    rat[decoder_result.rs1],
+                    rat[decoder_result.rs2],
+                )
+                # 关键寄存器 x14 的映射快照，便于排查依赖
+                log("rat snapshot: x14 pending={}", rat[Bits(5)(14)])
 
                 # 重命名表写入 rd（存 rob_idx+1，0 作为 sentinel）
-                rat.write_if(
-                    decoder_result.rd_used & (decoder_result.rd != Bits(5)(0)),
-                    decoder_result.rd,
-                    (rob_idx + UInt(ROB_IDX_WIDTH)(1)).bitcast(Bits(REG_PENDING_WIDTH))
-                )
+
+                # !!!
+                # write if 的信息传出去给 RAT_downstream 处理
+
+                # rat.write_if(
+                #     decoder_result.rd_used & (decoder_result.rd != Bits(5)(0)),
+                #     decoder_result.rd,
+                #     rob_tag_plus1,
+                # )
+                with Condition(decoder_result.rd_used & (decoder_result.rd != Bits(5)(0))):
+                    log(
+                        "rat write_if: pc=0x{:08x} rd={} rob_idx={} write_val={}",
+                        pc_addr,
+                        decoder_result.rd,
+                        rob_idx,
+                        rob_tag_plus1,
+                    )
 
                 with Condition(is_mem):
                     log("issuer -> LSQ: rob_idx={} rd={} rs1_dep={} rs2_dep={}", rob_idx, decoder_result.rd, qj, qk)
@@ -288,13 +328,17 @@ class IsserImpl(Downstream):
 
             stall_pc = pc_addr
         
+        write_if_cond = (re == Bits(1)(1)) & (~stall) & decoder_result.rd_used & (decoder_result.rd != Bits(5)(0))
+        write_if_reg_idx = decoder_result.rd
+        write_if_value = rob_tag_plus1
+
         return IssueControl_signal.bundle(
             predict_valid = predict_valid,
             predict_target_pc = predict_target_pc,
             jalr_stall = jalr_stall,
             stall = stall,
             stall_pc = stall_pc,
-        )
+        ), write_if_cond, write_if_reg_idx, write_if_value
 
 class Fetcher(Module):
     def __init__(self):
@@ -570,10 +614,11 @@ def build_CPU(depth_log=18, data_base=0x2000):
         fetcherimpl = FetcherImpl()
         fetch_control = FetchControl()
         flush_control = FlushControl()
+        rat_downstream = RAT_downstream()
 
         # 构建各模块
         pc_reg, pc_addr = fetcher.build()
-        mem_we, mem_addr, mem_data = committer.build(
+        mem_we, mem_addr, mem_data, clear_if_cond, clear_if_reg_idx, clear_if_expected_value = committer.build(
             rob = rob,
             regs = regs,
             rat = rat,  # 传入 RAT 对象
@@ -614,7 +659,7 @@ def build_CPU(depth_log=18, data_base=0x2000):
         issue_pc_addr, instr, re = issuer.build(icache=icache)
         
         # Issue 产生预测控制信号（使用 BHT 预测）
-        issue_ctrl = issueimpl.build(
+        issue_ctrl, rat_write_if_cond, rat_write_if_reg_idx, rat_write_if_value = issueimpl.build(
             pc_addr=issue_pc_addr,
             instr=instr,
             re=re,
@@ -626,6 +671,16 @@ def build_CPU(depth_log=18, data_base=0x2000):
             regs=regs,
             bht=bht,  # 传入 BHT 用于预测
             cbd_signal=cbd_signal,
+        )
+
+        rat_downstream.build(
+            rat = rat,
+            write_if_cond = rat_write_if_cond,
+            write_if_reg_idx = rat_write_if_reg_idx,
+            write_if_value = rat_write_if_value,
+            clear_if_cond = clear_if_cond,
+            clear_if_reg_idx = clear_if_reg_idx,
+            clear_if_expected_value = clear_if_expected_value,
         )
         
         # FetchControl 整合所有控制信号

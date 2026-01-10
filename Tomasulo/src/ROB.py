@@ -94,21 +94,13 @@ class RAT:
         """支持 rat[reg_idx] 语法的读取"""
         return self.read(reg_idx)
     
-    def write(self, reg_idx: Value, value: Value):
-        """
-        时序逻辑写入，在Condition中调用
-        只写入指定的一个寄存器
-        """
-        for i in range(32):
-            with Condition(reg_idx == Bits(5)(i)):
-                self.pending[i][0] <= value
-    
     def write_if(self, cond: Value, reg_idx: Value, value: Value):
         """
         带条件的写入，用于处理 rd != 0 等情况
         """
         for i in range(32):
             with Condition(cond & (reg_idx == Bits(5)(i))):
+                log("RAT.write_if: rd={} val={}", reg_idx, value)
                 self.pending[i][0] <= value
     
     def clear_if(self, reg_idx: Value, expected_value: Value):
@@ -119,6 +111,7 @@ class RAT:
         for i in range(32):
             cond = (reg_idx == Bits(5)(i)) & (self.pending[i][0] == expected_value)
             with Condition(cond):
+                log("RAT.clear_if: rd={} pending={} -> 0", reg_idx, expected_value)
                 self.pending[i][0] <= Bits(REG_PENDING_WIDTH)(0)
     
     def flush_all(self):
@@ -128,6 +121,28 @@ class RAT:
         for i in range(32):
             self.pending[i][0] <= Bits(REG_PENDING_WIDTH)(0)
 
+# 避免 clear_if 和 write_if 冲突，如果同时操作同一个寄存器，那么 write_if 优先级更高
+class RAT_downstream(Downstream):
+    def __init__(self):
+        super().__init__()
+    @downstream.combinational
+    def build(self,
+              rat: RAT,
+              write_if_cond: Value,
+              write_if_reg_idx: Value,
+              write_if_value: Value,
+              clear_if_cond : Value,
+              clear_if_reg_idx: Value,
+              clear_if_expected_value: Value):
+        write_if_cond = write_if_cond.optional(default=Bits(1)(0))
+        write_if_reg_idx = write_if_reg_idx.optional(default=Bits(5)(0))
+        write_if_value = write_if_value.optional(default=Bits(REG_PENDING_WIDTH)(0))
+        clear_if_cond = clear_if_cond.optional(default=Bits(1)(0))
+        clear_if_reg_idx = clear_if_reg_idx.optional(default=Bits(5)(0))
+        clear_if_expected_value = clear_if_expected_value.optional(default=Bits(REG_PENDING_WIDTH)(0))
+        rat.write_if(write_if_cond, write_if_reg_idx, write_if_value)
+        with Condition(((~write_if_cond) | (write_if_reg_idx != clear_if_reg_idx)) & clear_if_cond):
+            rat.clear_if(clear_if_reg_idx, clear_if_expected_value)
 
 # ROB: 按字段分布式存储为寄存器队列，同时维护头尾指针
 # 需要在 flush 时清空的字段使用独立 RegArray 列表，避免动态/静态索引冲突

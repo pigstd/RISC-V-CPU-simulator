@@ -20,8 +20,9 @@ class Commiter(Module):
         rob_value_head = rob._read_value(head)
         log("commit: can_commit={} head={} is_store={} rd={} value={}", can_commit, head, is_store_head, rob.dest[head], rob_value_head)
 
+        log("rat x14 : {}", rat.pending[14][0])
         # 仅当 RAT 仍指向 head 时清零映射
-        head_tag = (head + UInt(ROB_IDX_WIDTH)(1)).bitcast(Bits(REG_PENDING_WIDTH))
+        head_tag = (head.zext(UInt(REG_PENDING_WIDTH)) + UInt(REG_PENDING_WIDTH)(1)).bitcast(Bits(REG_PENDING_WIDTH))
         dest = rob.dest[head]
 
         with Condition(can_commit):
@@ -34,7 +35,8 @@ class Commiter(Module):
             with Condition(~is_store_head & (dest != Bits(5)(0))):
                 regs[dest] <= rob_value_head
                 # 使用 RAT 的 clear_if 方法，仅当当前映射仍指向此 ROB entry 时清零
-                rat.clear_if(dest, head_tag)
+                # 这个要传给 RAT_downstream 处理 clear_if
+                # rat.clear_if(dest, head_tag)
                 log("commit: writeback rd={} value={}", dest, rob_value_head)
             # 清空 entry 状态
             rob._write_busy(head, Bits(1)(0))
@@ -55,5 +57,8 @@ class Commiter(Module):
             # head++（环形）
             next_head = ((head + UInt(ROB_IDX_WIDTH)(1)) & UInt(ROB_IDX_WIDTH)((1 << ROB_IDX_WIDTH) - 1)).bitcast(UInt(ROB_IDX_WIDTH))
             rob.head[0] <= next_head
-        return mem_we, mem_addr, mem_data
+        clear_if_cond = can_commit & (~is_store_head & (dest != Bits(5)(0)))
+        clear_if_reg_idx = dest
+        clear_if_expected_value = head_tag
+        return mem_we, mem_addr, mem_data, clear_if_cond, clear_if_reg_idx, clear_if_expected_value
         
