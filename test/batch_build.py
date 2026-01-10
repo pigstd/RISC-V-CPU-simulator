@@ -5,8 +5,10 @@ import sys
 import json
 
 # ================= 配置区域 =================
-SOURCE_DIR = "src"          # 存放 C 代码的文件夹
-OUTPUT_DIR = "test_suite"   # 输出结果的文件夹
+# 获取脚本所在目录，确保路径正确
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+SOURCE_DIR = os.path.join(SCRIPT_DIR, "src")          # 存放 C 代码的文件夹
+OUTPUT_DIR = os.path.join(SCRIPT_DIR, "test_suite")   # 输出结果的文件夹
 
 # RISC-V 工具链前缀
 RV_PREFIX = "riscv64-unknown-elf-"
@@ -46,11 +48,12 @@ def run_cmd(cmd, cwd=None):
 
 def create_common_files():
     """生成通用的 start.s 和 linker.ld"""
-    if not os.path.exists("common"):
-        os.makedirs("common")
+    common_dir = os.path.join(SCRIPT_DIR, "common")
+    if not os.path.exists(common_dir):
+        os.makedirs(common_dir)
         
     # start.s
-    with open("common/start.s", "w") as f:
+    with open(os.path.join(common_dir, "start.s"), "w") as f:
         f.write(f"""
 .section .text
 .globl _start
@@ -65,7 +68,7 @@ __main_loop:
 """)
 
     # linker.ld
-    with open("common/linker.ld", "w") as f:
+    with open(os.path.join(common_dir, "linker.ld"), "w") as f:
         f.write(f"""
 OUTPUT_ARCH( "riscv" )
 ENTRY( _start )
@@ -105,8 +108,8 @@ def generate_ans(c_path, case_dir, case_name):
 def generate_riscv_files(c_path, case_dir, case_name):
     """生成 RISC-V 的 .exe (指令) 和 .data (数据)"""
     elf_file = os.path.join(case_dir, f"{case_name}.elf")
-    linker = os.path.abspath("common/linker.ld")
-    start_s = os.path.abspath("common/start.s")
+    linker = os.path.join(SCRIPT_DIR, "common", "linker.ld")
+    start_s = os.path.join(SCRIPT_DIR, "common", "start.s")
     
     # 根据测试用例选择架构：M 扩展测试使用 rv32im，其他使用 rv32i
     if case_name in M_EXTENSION_TESTS:

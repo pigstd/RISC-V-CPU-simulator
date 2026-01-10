@@ -15,5 +15,6 @@ int main() {
     sum += data[3];     // -200
     
     // 1000 + (-500) + 2000 + (-200) = 2300
-    return sum % 256;   // 预期: 252
+    if(sum==2300)return 1;
+    else  return 0;
 }

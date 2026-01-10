@@ -18,5 +18,6 @@ int main() {
     sum += buf[3];
     
     // 100 + 200 + 300 + 400 = 1000
-    return sum % 256;   // 预期: 232
+    if(sum==1000)return 1;
+    else  return 0;
 }

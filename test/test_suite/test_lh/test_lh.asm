@@ -1,5 +1,5 @@
 
-test_suite/test_lh/test_lh.elf:     file format elf32-littleriscv
+/home/louhao/System-2025/RISC-V-CPU-simulator/test/test_suite/test_lh/test_lh.elf:     file format elf32-littleriscv
 
 
 Disassembly of section .text:
@@ -42,12 +42,13 @@ Disassembly of section .text:
   78:	00f707b3          	add	a5,a4,a5
   7c:	fef42623          	sw	a5,-20(s0)
   80:	fec42703          	lw	a4,-20(s0)
-  84:	41f75793          	srai	a5,a4,0x1f
-  88:	0187d793          	srli	a5,a5,0x18
-  8c:	00f70733          	add	a4,a4,a5
-  90:	0ff77713          	andi	a4,a4,255
-  94:	40f707b3          	sub	a5,a4,a5
-  98:	00078513          	mv	a0,a5
-  9c:	02c12403          	lw	s0,44(sp)
-  a0:	03010113          	addi	sp,sp,48
-  a4:	00008067          	ret
+  84:	000017b7          	lui	a5,0x1
+  88:	8fc78793          	addi	a5,a5,-1796 # 8fc <main+0x8ec>
+  8c:	00f71663          	bne	a4,a5,98 <main+0x88>
+  90:	00100793          	li	a5,1
+  94:	0080006f          	j	9c <main+0x8c>
+  98:	00000793          	li	a5,0
+  9c:	00078513          	mv	a0,a5
+  a0:	02c12403          	lw	s0,44(sp)
+  a4:	03010113          	addi	sp,sp,48
+  a8:	00008067          	ret
