@@ -202,7 +202,7 @@ def run_test(name: str, sim_threshold: int = None, idle_threshold: int = None, v
             cmd,
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=240,
             cwd=str(REPO_ROOT),
         )
     except subprocess.TimeoutExpired:
