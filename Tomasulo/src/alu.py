@@ -1,8 +1,10 @@
 from assassyn.frontend import *
 try:
     from .instruction import *
+    from .ROB import ROB_IDX_WIDTH
 except ImportError:
     from Tomasulo.src.instruction import *
+    from Tomasulo.src.ROB import ROB_IDX_WIDTH
 
 # 全局配置 - 数据段基地址（默认 0x2000）
 # 可通过 executor.DATA_BASE_OFFSET = xxx 在外部设置
@@ -17,15 +19,20 @@ ALU_signal = Record(
     is_jalr = Bits(1),# 是否 JALR 指令
     pc_addr = UInt(32),   # 当前指令 PC 地址
     imm_val = UInt(32),   # 立即数
-    ROB_idx = UInt(4),    # 指令在 ROB 中的索引
+    ROB_idx = UInt(ROB_IDX_WIDTH),    # 指令在 ROB 中的索引
 )
 
 ALU_CBD_signal = Record(
-    ROB_idx = UInt(4),    # 指令在 ROB 中的索引
+    ROB_idx = UInt(ROB_IDX_WIDTH),    # 指令在 ROB 中的索引
     rd_data = UInt(32),   # 写回数据
     valid = Bits(1),     # 数据有效标志
     is_branch = Bits(1),  # 是否分支指令
     next_pc = UInt(32),   # 分支指令的下一个 PC（如果不是分支指令则无效）
+    # 分支预测验证所需字段
+    is_jalr = Bits(1),    # 是否 JALR 指令（JALR完成后需要恢复取指）
+    is_jal = Bits(1),     # 是否 JAL 指令
+    is_B = Bits(1),       # 是否条件分支 B 指令
+    branch_taken = Bits(1), # B 指令是否真正跳转（用于验证预测）
 )
 
 # jal ：op1 = pc, op2 = imm
@@ -96,6 +103,10 @@ class ALU(Module):
             valid = Bits(1)(1),
             is_branch = is_branch,
             next_pc = next_pc,
+            is_jalr = signal.is_jalr,
+            is_jal = signal.is_jal,
+            is_B = signal.is_B,
+            branch_taken = branch_taken,
         )
 
         return cbd_signal

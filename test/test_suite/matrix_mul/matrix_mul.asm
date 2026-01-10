@@ -1,5 +1,5 @@
 
-test_suite/matrix_mul/matrix_mul.elf:     file format elf32-littleriscv
+/home/louhao/System-2025/RISC-V-CPU-simulator/test/test_suite/matrix_mul/matrix_mul.elf:     file format elf32-littleriscv
 
 
 Disassembly of section .text:

@@ -1,5 +1,5 @@
 
-test_suite/simple_add/simple_add.elf:     file format elf32-littleriscv
+/home/louhao/System-2025/RISC-V-CPU-simulator/test/test_suite/simple_add/simple_add.elf:     file format elf32-littleriscv
 
 
 Disassembly of section .text:
