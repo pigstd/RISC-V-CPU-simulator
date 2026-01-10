@@ -100,7 +100,7 @@ class MultiplierState(Downstream):
             mul_regs.cycle_cnt[0] <= UInt(4)(0)
             # 直接写入 ROB
             rob._write_ready(rob_idx, Bits(1)(1))
-            rob.value[rob_idx] <= mul_result
+            rob._write_value(rob_idx, mul_result)
             log("MulState: done, result=0x{:08x} rob_idx={}, wrote to ROB", mul_result, rob_idx)
         
         # 返回完成信号（用于广播给 RS 更新操作数）
@@ -141,7 +141,7 @@ class MultiplierState(Downstream):
             cycle_cnt[0] <= UInt(4)(0)
             # 直接写入 ROB
             rob._write_ready(rob_idx_reg[0], Bits(1)(1))
-            rob.value[rob_idx_reg[0]] <= mul_result
+            rob._write_value(rob_idx_reg[0], mul_result)
             log("MulState: done, result=0x{:08x} rob_idx={}, wrote to ROB", mul_result, rob_idx_reg[0])
         
         # 返回完成信号（用于广播给 RS 更新操作数）

@@ -150,7 +150,8 @@ class ROB:
         # ========== 不需要在 flush 时清空的字段：保持单个 RegArray ==========
         # 这些字段只在分配或更新时用动态索引写入，不会冲突
         self.dest = RegArray(Bits(5), FIFO_SIZE, initializer=[0] * FIFO_SIZE)
-        self.value = RegArray(UInt(32), FIFO_SIZE, initializer=[0] * FIFO_SIZE)
+        # value 可能在同一周期被多个执行单元写入，拆成 per-entry RegArray 以避免同一端口被重复使用
+        self.value = [RegArray(UInt(32), 1, initializer=[0]) for _ in range(FIFO_SIZE)]
         self.pc = RegArray(UInt(32), FIFO_SIZE, initializer=[0] * FIFO_SIZE)
         # store 专用字段：地址与数据
         self.store_addr = RegArray(UInt(32), FIFO_SIZE, initializer=[0] * FIFO_SIZE)
@@ -247,6 +248,19 @@ class ROB:
         for i in range(FIFO_SIZE):
             with Condition(idx == UInt(ROB_IDX_WIDTH)(i)):
                 self.predicted_taken[i][0] <= val
+
+    def _read_value(self, idx: Value) -> Value:
+        """通过动态索引读取 value（拆分为 per-entry RegArray 后的包装）"""
+        result = UInt(32)(0)
+        for i in range(FIFO_SIZE):
+            result = (idx == UInt(ROB_IDX_WIDTH)(i)).select(self.value[i][0], result)
+        return result
+
+    def _write_value(self, idx: Value, val: Value):
+        """通过动态索引写入 value（每个 entry 独立的 RegArray）"""
+        for i in range(FIFO_SIZE):
+            with Condition(idx == UInt(ROB_IDX_WIDTH)(i)):
+                self.value[i][0] <= val
 
     def is_full(self) -> Bits:
         """

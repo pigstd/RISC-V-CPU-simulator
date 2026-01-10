@@ -71,7 +71,7 @@ class CDB_Arbitrator(Downstream):
         # LSU 直接写 ROB
         with Condition(lsu_valid):
             rob._write_ready(lsu_rob_idx, Bits(1)(1))
-            rob.value[lsu_rob_idx] <= lsu_rd_data
+            rob._write_value(lsu_rob_idx, lsu_rd_data)
             log("NoArb: LSU done, rob_idx={} rd_data=0x{:08x}", lsu_rob_idx, lsu_rd_data)
             # Store 记录地址和数据
             with Condition(lsu_is_store):
@@ -110,7 +110,7 @@ class CDB_Arbitrator(Downstream):
             # ALU 直接写 ROB
             with Condition(alu_valid):
                 rob._write_ready(alu_rob_idx, Bits(1)(1))
-                rob.value[alu_rob_idx] <= alu_rd_data
+                rob._write_value(alu_rob_idx, alu_rd_data)
                 log("NoArb: ALU done, rob_idx={} rd_data=0x{:08x}", alu_rob_idx, alu_rd_data)
             
             # 收集广播信号

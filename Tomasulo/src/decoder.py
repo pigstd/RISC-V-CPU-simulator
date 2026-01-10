@@ -148,7 +148,7 @@ def decoder_logic(inst, reg_pending: Union[RegArray, 'RAT'], regs: RegArray
         rs1_rob_tag_used.select(
             (cbd.valid & (rs1_rob_tag == cbd.ROB_idx)).select(
                 cbd.rd_data,
-                rob.value[rs1_rob_tag]
+                rob._read_value(rs1_rob_tag)
             ),
             regs[rs1]
         ),
@@ -158,7 +158,7 @@ def decoder_logic(inst, reg_pending: Union[RegArray, 'RAT'], regs: RegArray
         rs2_rob_tag_used.select(
             (cbd.valid & (rs2_rob_tag == cbd.ROB_idx)).select(
                 cbd.rd_data,
-                rob.value[rs2_rob_tag]
+                rob._read_value(rs2_rob_tag)
             ),
             regs[rs2]
         ),

@@ -171,7 +171,7 @@ class IsserImpl(Downstream):
                 rob._write_ready(rob_idx, Bits(1)(0))
                 rob.pc[rob_idx] <= pc_addr
                 rob.dest[rob_idx] <= decoder_result.rd
-                rob.value[rob_idx] <= UInt(32)(0)
+                rob._write_value(rob_idx, UInt(32)(0))
                 rob._write_is_branch(rob_idx, decoder_result.is_branch)
                 rob._write_is_syscall(rob_idx, decoder_result.is_ecall | decoder_result.is_ebreak)
                 rob._write_is_store(rob_idx, decoder_result.mem_write)
