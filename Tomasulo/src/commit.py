@@ -14,6 +14,8 @@ class Commiter(Module):
         can_commit = rob._read_busy(head) & rob._read_ready(head)
 
         is_store_head = rob._read_is_store(head)
+        is_branch_head = rob._read_is_branch(head)
+        is_jalr_head = rob._read_is_jalr(head)
         mem_we = can_commit & is_store_head
         mem_addr = mem_we.select(rob.store_addr[head], UInt(32)(0))
         mem_data = mem_we.select(rob.store_data[head], UInt(32)(0))
@@ -24,6 +26,16 @@ class Commiter(Module):
         # 仅当 RAT 仍指向 head 时清零映射
         head_tag = (head.zext(UInt(REG_PENDING_WIDTH)) + UInt(REG_PENDING_WIDTH)(1)).bitcast(Bits(REG_PENDING_WIDTH))
         dest = rob.dest[head]
+        
+        # 分支预测错误检测（用于日志，实际 flush 由 FetchControl Downstream 触发）
+        predicted_taken = rob._read_predicted_taken(head)
+        actual_taken = rob._read_actual_taken(head)
+        is_B_branch = is_branch_head & (~is_jalr_head)
+        b_mispredicted = is_B_branch & (predicted_taken != actual_taken)
+        mispredicted = can_commit & b_mispredicted
+        
+        log("commit: is_branch={} is_jalr={} predicted={} actual={} mispred={}",
+            is_branch_head, is_jalr_head, predicted_taken, actual_taken, mispredicted)
 
         with Condition(can_commit):
             # 统一的提交日志，便于统计提交数量（含 store 和 syscall）
@@ -53,6 +65,8 @@ class Commiter(Module):
             rob._write_predicted_taken(head, Bits(1)(0))
             rob.predicted_pc[head] <= UInt(32)(0)
             rob._write_is_jalr(head, Bits(1)(0))
+            rob._write_actual_taken(head, Bits(1)(0))
+            rob._write_actual_next_pc(head, UInt(32)(0))
 
             # head++（环形）
             next_head = ((head + UInt(ROB_IDX_WIDTH)(1)) & UInt(ROB_IDX_WIDTH)((1 << ROB_IDX_WIDTH) - 1)).bitcast(UInt(ROB_IDX_WIDTH))
@@ -60,5 +74,6 @@ class Commiter(Module):
         clear_if_cond = can_commit & (~is_store_head & (dest != Bits(5)(0)))
         clear_if_reg_idx = dest
         clear_if_expected_value = head_tag
+        # mispredicted 检测移到 FetchControl Downstream，这里只返回原来的值
         return mem_we, mem_addr, mem_data, clear_if_cond, clear_if_reg_idx, clear_if_expected_value
         

@@ -112,6 +112,12 @@ class CDB_Arbitrator(Downstream):
                 rob._write_ready(alu_rob_idx, Bits(1)(1))
                 rob._write_value(alu_rob_idx, alu_rd_data)
                 log("NoArb: ALU done, rob_idx={} rd_data=0x{:08x}", alu_rob_idx, alu_rd_data)
+                # 分支指令：把执行结果写入 ROB，commit 时再判断 mispredicted
+                with Condition(alu_req.is_branch):
+                    rob._write_actual_taken(alu_rob_idx, alu_req.branch_taken)
+                    rob._write_actual_next_pc(alu_rob_idx, alu_req.next_pc)
+                    log("NoArb: Branch exec rob_idx={} actual_taken={} actual_next_pc=0x{:08x}",
+                        alu_rob_idx, alu_req.branch_taken, alu_req.next_pc)
             
             # 收集广播信号
             alu_broadcasts.append((alu_rob_idx, alu_rd_data, alu_valid))
@@ -130,35 +136,26 @@ class CDB_Arbitrator(Downstream):
         lsu_broadcast = (lsu_rob_idx, lsu_rd_data, lsu_valid)
         
         # ========== 分支控制信号生成 ==========
-        # 获取 ROB 中的预测信息
-        predicted_taken = rob._read_predicted_taken(branch_rob_idx)
-        predicted_pc = rob.predicted_pc[branch_rob_idx]
+        # 注意：mispredicted 的检测移到 commit 阶段，这里只处理 JALR 立即恢复取指
         branch_pc = rob.pc[branch_rob_idx]
         
-        # B 指令预测错误检测
-        b_mispredicted_taken = branch_is_B & predicted_taken & (~branch_taken)
-        b_mispredicted_not_taken = branch_is_B & (~predicted_taken) & branch_taken
-        b_mispredicted = b_mispredicted_taken | b_mispredicted_not_taken
-        
-        # JALR 完成信号
+        # JALR 完成信号（JALR 需要立即恢复取指，因为之前 stall 了）
         jalr_resolved = any_branch & branch_is_jalr
         jalr_target_pc = branch_next_pc
         
-        # 预测错误信号
-        mispredicted = any_branch & b_mispredicted
-        correct_pc = branch_next_pc
-        
-        # 更新 BHT（只有 B 类型条件分支）
+        # 更新 BHT（只有 B 类型条件分支执行完就更新）
         bht.update_if(branch_is_B & any_branch, branch_pc, branch_taken)
         
-        log("CDB branch: any={} is_B={} taken={} predicted={} mispred={}", 
-            any_branch, branch_is_B, branch_taken, predicted_taken, mispredicted)
+        log("CDB branch: any={} is_B={} is_jalr={} taken={} next_pc=0x{:08x}", 
+            any_branch, branch_is_B, branch_is_jalr, branch_taken, branch_next_pc)
         
+        # mispredicted 和 correct_pc 不再在这里生成，设为 0
+        # commit 阶段会生成真正的 mispredicted 信号
         branch_ctrl = BranchControl_signal.bundle(
             jalr_resolved = jalr_resolved,
             jalr_target_pc = jalr_target_pc,
-            mispredicted = mispredicted,
-            correct_pc = correct_pc,
+            mispredicted = Bits(1)(0),  # 移到 commit 阶段检测
+            correct_pc = UInt(32)(0),   # 移到 commit 阶段提供
         )
         
         # 为了兼容性，构建一个合并的 CBD_signal（用于 Issue 旁路）

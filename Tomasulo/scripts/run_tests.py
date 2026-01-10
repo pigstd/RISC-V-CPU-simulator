@@ -21,6 +21,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 # Paths
@@ -50,9 +51,16 @@ COMMIT_PATTERN = re.compile(
     r"commit: retire rob=\d+\s+pc=0x[0-9a-fA-F]+\s+rd=(\d+)\s+is_store=\d+\s+value=0x([0-9a-fA-F]+)",
     re.IGNORECASE,
 )
-# 分支预测统计
-BRANCH_PATTERN = re.compile(r"CDB branch:.*is_B=1")
-MISPRED_PATTERN = re.compile(r"CDB branch:.*mispred=1")
+# 分支预测统计 - 现在在 commit 阶段统计
+# 匹配: commit: is_branch=1 is_jalr=0 predicted=... actual=... mispred=...
+BRANCH_PATTERN = re.compile(r"commit: is_branch=1\s+is_jalr=0")
+# 匹配: commit: is_branch=1 is_jalr=0 ... mispred=1
+MISPRED_PATTERN = re.compile(r"commit: is_branch=1\s+is_jalr=0\s+predicted=\d+\s+actual=\d+\s+mispred=1")
+# Verilator 统计信息：匹配 ** TESTS=1 PASS=1 ... SIM_TIME REAL_TIME RATIO **
+# 格式: ** TESTS=1 PASS=1 FAIL=0 SKIP=0             256000.00           0.70     367154.36  **
+VERILATOR_STATS_PATTERN = re.compile(
+    r"\*\*\s+TESTS=\d+\s+PASS=\d+\s+FAIL=\d+\s+SKIP=\d+\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+\*\*"
+)
 
 
 def discover_tests():
@@ -158,7 +166,7 @@ def extract_a0(log_text: str):
 def run_test(name: str, sim_threshold: int = None, idle_threshold: int = None, verbose: bool = False, use_verilator: bool = False):
     """Run one test; returns (ok, message, stats)."""
     files = get_test_files(name)
-    stats = {"cycles": 0, "commits": 0, "fetches": 0, "branches": 0, "mispreds": 0}
+    stats = {"cycles": 0, "commits": 0, "fetches": 0, "branches": 0, "mispreds": 0, "sim_time": 0.0, "veri_time": 0.0, "veri_cycles": 0}
 
     if not files["exe"].exists():
         return False, f"missing {name}.exe", stats
@@ -197,6 +205,8 @@ def run_test(name: str, sim_threshold: int = None, idle_threshold: int = None, v
     ]
     if not use_verilator:
         cmd.append("--no-verilator")
+    
+    start_time = time.time()
     try:
         proc = subprocess.run(
             cmd,
@@ -206,7 +216,9 @@ def run_test(name: str, sim_threshold: int = None, idle_threshold: int = None, v
             cwd=str(REPO_ROOT),
         )
     except subprocess.TimeoutExpired:
-        return False, "timeout (120s)", stats
+        return False, "timeout (240s)", stats
+    
+    total_time = time.time() - start_time
 
     if proc.returncode != 0:
         if verbose:
@@ -215,6 +227,7 @@ def run_test(name: str, sim_threshold: int = None, idle_threshold: int = None, v
 
     log_text = LOG_FILE.read_text() if LOG_FILE.exists() else proc.stdout
     stats = extract_stats(log_text)
+    stats["sim_time"] = total_time
     a0_val = extract_a0(log_text)
     if a0_val is None:
         if verbose:
@@ -228,6 +241,16 @@ def run_test(name: str, sim_threshold: int = None, idle_threshold: int = None, v
             veri_text = veri_log.read_text()
             veri_a0 = extract_a0(veri_text)
             veri_stats = extract_stats(veri_text)
+            stats["veri_cycles"] = veri_stats.get("cycles", 0)
+            stats["veri_branches"] = veri_stats.get("branches", 0)
+            stats["veri_mispreds"] = veri_stats.get("mispreds", 0)
+            # 从 verilator_log 末尾提取 Verilator 自带的统计信息
+            # 格式: ** TESTS=1 PASS=1 FAIL=0 SKIP=0  SIM_TIME  REAL_TIME  RATIO **
+            veri_stats_match = VERILATOR_STATS_PATTERN.search(veri_text)
+            if veri_stats_match:
+                stats["veri_sim_ns"] = float(veri_stats_match.group(1))  # SIM TIME (ns)
+                stats["veri_real_s"] = float(veri_stats_match.group(2))  # REAL TIME (s)
+                stats["veri_ratio"] = float(veri_stats_match.group(3))   # RATIO (ns/s)
         else:
             veri_a0 = None
             veri_stats = {}
@@ -277,13 +300,19 @@ def main():
         return
 
     print(f"Running {len(targets)} test(s) with Tomasulo simulator...\n")
-    header = f"{'Test Name':<20} {'Status':<6} {'Cycles':>8} {'Instrs':>8} {'Branches':>8} {'Mispred':>8} {'Acc%':>6} Message"
+    
+    if args.verilator:
+        header = f"{'Test':<14} {'St':<4} {'Cyc':>7} {'VCyc':>7} {'Instr':>6} {'Br':>5} {'Mis':>4} {'Acc%':>5} {'VeriTime':>8} {'Ratio':>10} Message"
+    else:
+        header = f"{'Test Name':<16} {'Status':<6} {'Cycles':>8} {'Instrs':>8} {'Branch':>7} {'Misprd':>7} {'Acc%':>6} {'Time':>7} Message"
     separator = "-" * len(header)
     print(header)
     print(separator)
 
     report_lines = [header, separator]
     passed = 0
+    total_time = 0.0
+    total_veri_time = 0.0
     for name in targets:
         ok, msg, stats = run_test(
             name,
@@ -293,23 +322,43 @@ def main():
             use_verilator=args.verilator,
         )
         status = "PASS" if ok else "FAIL"
-        # 计算预测正确率
-        branches = stats.get('branches', 0)
-        mispreds = stats.get('mispreds', 0)
+        # 计算预测正确率（使用 verilator 的统计）
+        if args.verilator:
+            branches = stats.get('veri_branches', 0)
+            mispreds = stats.get('veri_mispreds', 0)
+        else:
+            branches = stats.get('branches', 0)
+            mispreds = stats.get('mispreds', 0)
         commits = stats.get('commits', 0)
-        instrs = commits + mispreds  # 总指令数 = 提交数 + 误预测数
+        sim_time = stats.get('sim_time', 0.0)
+        total_time += sim_time
+        
         if branches > 0:
             accuracy = (branches - mispreds) / branches * 100
             acc_str = f"{accuracy:.1f}"
         else:
             acc_str = "N/A"
-        line = f"{name:<20} {status:<6} {stats['cycles']:>8} {instrs:>8} {branches:>8} {mispreds:>8} {acc_str:>6} {msg}"
+        
+        if args.verilator:
+            veri_cycles = stats.get('veri_cycles', 0)
+            veri_real_s = stats.get('veri_real_s', 0.0)
+            veri_ratio = stats.get('veri_ratio', 0.0)
+            total_veri_time += veri_real_s
+            veri_time_str = f"{veri_real_s:.2f}s"
+            ratio_str = f"{veri_ratio:.0f}" if veri_ratio > 0 else "N/A"
+            line = f"{name:<14} {status:<4} {stats['cycles']:>7} {veri_cycles:>7} {commits:>6} {branches:>5} {mispreds:>4} {acc_str:>5} {veri_time_str:>8} {ratio_str:>10} {msg}"
+        else:
+            time_str = f"{sim_time:.2f}s"
+            line = f"{name:<16} {status:<6} {stats['cycles']:>8} {commits:>8} {branches:>7} {mispreds:>7} {acc_str:>6} {time_str:>7} {msg}"
         print(line)
         report_lines.append(line)
         passed += int(ok)
 
-    summary = f"Summary: {passed}/{len(targets)} passed, {len(targets) - passed} failed"
-    print("\n" + summary)
+    if args.verilator:
+        summary = f"\nSummary: {passed}/{len(targets)} passed, {len(targets) - passed} failed, verilator time: {total_veri_time:.2f}s, total time: {total_time:.2f}s"
+    else:
+        summary = f"\nSummary: {passed}/{len(targets)} passed, {len(targets) - passed} failed, total time: {total_time:.2f}s"
+    print(summary)
     report_lines.append(summary)
 
     if not args.no_report:

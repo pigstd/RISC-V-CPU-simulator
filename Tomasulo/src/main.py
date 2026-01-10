@@ -87,7 +87,7 @@ class IsserImpl(Downstream):
               pc_addr: Value,
               instr: Value,
               re: Value,
-              branch_ctrl, # 根据这个判断是否要 do_flush
+              branch_ctrl, # 用于 JALR resolved 信号
               rob: ROB,
               rs: list[RSEntry],
               mul_rs: list[MUL_RSEntry],  # 乘法保留站（2个）
@@ -160,14 +160,18 @@ class IsserImpl(Downstream):
         is_jalr_issue = decoder_result.is_jalr & re & (~resource_stall)
         jalr_stall = is_jalr_issue
 
-        branch_payload = branch_ctrl.value().optional(default=BranchControl_signal.bundle(
-            jalr_resolved = Bits(1)(0),
-            jalr_target_pc = UInt(32)(0),
-            mispredicted = Bits(1)(0),
-            correct_pc = UInt(32)(0),
-        ).value())
-        branch = BranchControl_signal.view(branch_payload)
-        do_flush = branch.mispredicted
+        # ========== 直接从 ROB 检测 commit 时的 mispredicted ==========
+        head = rob.head[0]
+        can_commit = rob._read_busy(head) & rob._read_ready(head)
+        head_is_branch = rob._read_is_branch(head)
+        head_is_jalr = rob._read_is_jalr(head)
+        head_predicted_taken = rob._read_predicted_taken(head)
+        head_actual_taken = rob._read_actual_taken(head)
+        
+        head_is_B_branch = head_is_branch & (~head_is_jalr)
+        head_b_mispredicted = head_is_B_branch & (head_predicted_taken != head_actual_taken)
+        do_flush = can_commit & head_b_mispredicted
+        
         # flush 时不发射指令
         re = re & (~do_flush)
         
@@ -371,7 +375,7 @@ class FetchControl(Downstream):
     整合来自 Issue 和 CDB 的所有控制信号，同周期传递给 Fetcher
     
     优先级（从高到低）：
-    1. flush (mispredicted): 预测错误，跳转到 correct_pc
+    1. flush (mispredicted): 预测错误，跳转到 correct_pc（在 commit 时检测）
     2. jalr_resolved: JALR 执行完成，跳转到计算出的地址
     3. jalr_stall: 遇到 JALR，暂停取指
     4. predict_valid: B/JAL 预测跳转
@@ -384,7 +388,8 @@ class FetchControl(Downstream):
     @downstream.combinational
     def build(self,
               issue_ctrl,      # IssueControl_signal RecordValue
-              branch_ctrl,     # BranchControl_signal RecordValue
+              branch_ctrl,     # BranchControl_signal RecordValue（只用于 JALR）
+              rob: ROB,        # 直接读取 ROB 检测 commit 时的 mispredicted
               ):
         # Issue 控制信号 - 使用 .value().optional() 模式
         issue_payload = issue_ctrl.value().optional(default=IssueControl_signal.bundle(
@@ -396,7 +401,7 @@ class FetchControl(Downstream):
         ).value())
         issue = IssueControl_signal.view(issue_payload)
         
-        # Branch 控制信号
+        # Branch 控制信号（只用于 JALR resolved）
         branch_payload = branch_ctrl.value().optional(default=BranchControl_signal.bundle(
             jalr_resolved = Bits(1)(0),
             jalr_target_pc = UInt(32)(0),
@@ -405,18 +410,38 @@ class FetchControl(Downstream):
         ).value())
         branch = BranchControl_signal.view(branch_payload)
         
+        # ========== 在 Downstream 中直接检测 commit 时的 mispredicted ==========
+        head = rob.head[0]
+        can_commit = rob._read_busy(head) & rob._read_ready(head)
+        is_branch_head = rob._read_is_branch(head)
+        is_jalr_head = rob._read_is_jalr(head)
+        predicted_taken = rob._read_predicted_taken(head)
+        actual_taken = rob._read_actual_taken(head)
+        actual_next_pc = rob._read_actual_next_pc(head)
+        
+        # B 类型条件分支：比较 predicted_taken 和 actual_taken
+        is_B_branch = is_branch_head & (~is_jalr_head)
+        b_mispredicted = is_B_branch & (predicted_taken != actual_taken)
+        
+        # commit 时检测到 mispredicted
+        commit_mispredicted = can_commit & b_mispredicted
+        commit_correct_pc = actual_next_pc
+        
+        log("FetchCtrl mispred check: can_commit={} is_B={} predicted={} actual={} mispred={}",
+            can_commit, is_B_branch, predicted_taken, actual_taken, commit_mispredicted)
+        
         # 计算最终的控制信号
         # 优先级：flush > jalr_resolved > jalr_stall > predict > stall > normal
         
-        # 最终输出
-        do_flush = branch.mispredicted
+        # 最终输出 - flush 来自 commit 阶段的检测
+        do_flush = commit_mispredicted
         do_jalr_resume = branch.jalr_resolved & (~do_flush)
         do_jalr_stall = issue.jalr_stall & (~do_flush) & (~do_jalr_resume)
         do_predict = issue.predict_valid & (~do_flush) & (~do_jalr_resume) & (~do_jalr_stall)
         do_stall = issue.stall & (~do_flush) & (~do_jalr_resume) & (~do_jalr_stall) & (~do_predict)
         
-        # 目标 PC
-        target_pc = do_flush.select(branch.correct_pc,
+        # 目标 PC - flush 时使用 correct_pc
+        target_pc = do_flush.select(commit_correct_pc,
                     do_jalr_resume.select(branch.jalr_target_pc,
                     do_predict.select(issue.predict_target_pc,
                     issue.stall_pc)))  # stall 时保持当前 PC
@@ -536,6 +561,9 @@ class FlushControl(Downstream):
     """
     Flush 控制 Downstream
     当检测到预测错误时，清理流水线状态
+    
+    注意：flush 发生时，Commiter 同周期会 commit 当前分支指令（head++）
+    所以 tail 要设为 head+1，而不是 head
     """
     def __init__(self):
         super().__init__()
@@ -558,8 +586,25 @@ class FlushControl(Downstream):
             # 1. 清空 RAT
             rat.flush_all()
             
-            # 2. 清空 ROB（重置指针，清空状态）
-            rob.flush()
+            # 2. 清空 ROB（但不调用 rob.flush()，因为要考虑 Commiter 同周期 commit）
+            # Commiter 会把 head 设为 head+1，我们把 tail 也设为 head+1
+            head = rob.head[0]
+            next_head = ((head + UInt(ROB_IDX_WIDTH)(1)) & UInt(ROB_IDX_WIDTH)(FIFO_SIZE - 1)).bitcast(UInt(ROB_IDX_WIDTH))
+            log("FLUSH: ROB tail {} -> {}", rob.tail[0], next_head)
+            rob.tail[0] <= next_head
+            # 清空所有 entry 的状态（Commiter 会清空 head 处的 entry）
+            for i in range(FIFO_SIZE):
+                # 跳过 head 处的 entry，让 Commiter 处理
+                with Condition(UInt(ROB_IDX_WIDTH)(i) != head):
+                    rob.busy[i][0] <= Bits(1)(0)
+                    rob.ready[i][0] <= Bits(1)(0)
+                    rob.is_branch[i][0] <= Bits(1)(0)
+                    rob.is_syscall[i][0] <= Bits(1)(0)
+                    rob.is_store[i][0] <= Bits(1)(0)
+                    rob.is_jalr[i][0] <= Bits(1)(0)
+                    rob.predicted_taken[i][0] <= Bits(1)(0)
+                    rob.actual_taken[i][0] <= Bits(1)(0)
+                    rob.actual_next_pc[i][0] <= UInt(32)(0)
             
             # 3. 清空所有 RS
             for i in range(RS_ENTRY_NUM):
@@ -631,6 +676,7 @@ def build_CPU(depth_log=18, data_base=0x2000):
 
         # 构建各模块
         pc_reg, pc_addr = fetcher.build()
+        # commiter 返回 store 操作和 RAT 清理信息
         mem_we, mem_addr, mem_data, clear_if_cond, clear_if_reg_idx, clear_if_expected_value = committer.build(
             rob = rob,
             regs = regs,
@@ -672,6 +718,7 @@ def build_CPU(depth_log=18, data_base=0x2000):
         issue_pc_addr, instr, re = issuer.build(icache=icache)
         
         # Issue 产生预测控制信号（使用 BHT 预测）
+        # Issue 产生预测控制信号（使用 BHT 预测），直接读取 ROB 检测 flush
         issue_ctrl, rat_write_if_cond, rat_write_if_reg_idx, rat_write_if_value = issueimpl.build(
             pc_addr=issue_pc_addr,
             instr=instr,
@@ -697,10 +744,11 @@ def build_CPU(depth_log=18, data_base=0x2000):
             clear_if_expected_value = clear_if_expected_value,
         )
         
-        # FetchControl 整合所有控制信号
+        # FetchControl 整合所有控制信号（直接读取 ROB 检测 mispredicted）
         do_flush, do_stall, do_jalr_stall, do_predict, do_jump, restart_fetch, target_pc, stall_pc = fetch_control.build(
             issue_ctrl=issue_ctrl,
             branch_ctrl=branch_ctrl,
+            rob=rob,  # 传入 ROB 用于检测 commit 时的 mispredicted
         )
         
         # FlushControl 处理 flush 时的清理

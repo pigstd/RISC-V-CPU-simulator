@@ -161,6 +161,9 @@ class ROB:
         self.is_store = [RegArray(Bits(1), 1, initializer=[0]) for _ in range(FIFO_SIZE)]
         self.is_jalr = [RegArray(Bits(1), 1, initializer=[0]) for _ in range(FIFO_SIZE)]
         self.predicted_taken = [RegArray(Bits(1), 1, initializer=[0]) for _ in range(FIFO_SIZE)]
+        # 分支执行结果（由 ALU 写入，commit 时用于检测 mispredicted）
+        self.actual_taken = [RegArray(Bits(1), 1, initializer=[0]) for _ in range(FIFO_SIZE)]
+        self.actual_next_pc = [RegArray(UInt(32), 1, initializer=[0]) for _ in range(FIFO_SIZE)]
         
         # ========== 不需要在 flush 时清空的字段：保持单个 RegArray ==========
         # 这些字段只在分配或更新时用动态索引写入，不会冲突
@@ -222,6 +225,20 @@ class ROB:
             result = (idx == UInt(ROB_IDX_WIDTH)(i)).select(self.predicted_taken[i][0], result)
         return result
     
+    def _read_actual_taken(self, idx: Value) -> Value:
+        """辅助方法：通过动态索引读取 actual_taken"""
+        result = Bits(1)(0)
+        for i in range(FIFO_SIZE):
+            result = (idx == UInt(ROB_IDX_WIDTH)(i)).select(self.actual_taken[i][0], result)
+        return result
+    
+    def _read_actual_next_pc(self, idx: Value) -> Value:
+        """辅助方法：通过动态索引读取 actual_next_pc"""
+        result = UInt(32)(0)
+        for i in range(FIFO_SIZE):
+            result = (idx == UInt(ROB_IDX_WIDTH)(i)).select(self.actual_next_pc[i][0], result)
+        return result
+    
     def _write_busy(self, idx: Value, val: Value):
         """辅助方法：通过动态索引写入 busy"""
         for i in range(FIFO_SIZE):
@@ -263,6 +280,18 @@ class ROB:
         for i in range(FIFO_SIZE):
             with Condition(idx == UInt(ROB_IDX_WIDTH)(i)):
                 self.predicted_taken[i][0] <= val
+
+    def _write_actual_taken(self, idx: Value, val: Value):
+        """辅助方法：通过动态索引写入 actual_taken"""
+        for i in range(FIFO_SIZE):
+            with Condition(idx == UInt(ROB_IDX_WIDTH)(i)):
+                self.actual_taken[i][0] <= val
+
+    def _write_actual_next_pc(self, idx: Value, val: Value):
+        """辅助方法：通过动态索引写入 actual_next_pc"""
+        for i in range(FIFO_SIZE):
+            with Condition(idx == UInt(ROB_IDX_WIDTH)(i)):
+                self.actual_next_pc[i][0] <= val
 
     def _read_value(self, idx: Value) -> Value:
         """通过动态索引读取 value（拆分为 per-entry RegArray 后的包装）"""
@@ -310,3 +339,5 @@ class ROB:
             self.is_store[i][0] <= Bits(1)(0)
             self.is_jalr[i][0] <= Bits(1)(0)
             self.predicted_taken[i][0] <= Bits(1)(0)
+            self.actual_taken[i][0] <= Bits(1)(0)
+            self.actual_next_pc[i][0] <= UInt(32)(0)
