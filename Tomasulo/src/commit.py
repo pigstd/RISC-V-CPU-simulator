@@ -18,9 +18,9 @@ class Commiter(Module):
         mem_addr = mem_we.select(rob.store_addr[head], UInt(32)(0))
         mem_data = mem_we.select(rob.store_data[head], UInt(32)(0))
         rob_value_head = rob._read_value(head)
-        log("commit: can_commit={} head={} is_store={} rd={} value={}", can_commit, head, is_store_head, rob.dest[head], rob_value_head)
+        log("commit: can_commit={} head={} tail={} is_store={} rd={} value={}", can_commit, head, rob.tail[0], is_store_head, rob.dest[head], rob_value_head)
 
-        log("rat x14 : {}", rat.pending[14][0])
+        log("ROB tail: {}", rob.tail[0])
         # 仅当 RAT 仍指向 head 时清零映射
         head_tag = (head.zext(UInt(REG_PENDING_WIDTH)) + UInt(REG_PENDING_WIDTH)(1)).bitcast(Bits(REG_PENDING_WIDTH))
         dest = rob.dest[head]

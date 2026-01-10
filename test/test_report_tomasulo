@@ -1,4 +1,4 @@
 Test Name            Status   Cycles   Instrs Branches  Mispred   Acc% Message
 ------------------------------------------------------------------------------
-array_sum            FAIL        249      117        7        1   85.7 verilator a0 mismatch: got 10, expected 210
-Summary: 0/1 passed, 1 failed
+array_sum            PASS        249      117        7        1   85.7 sim a0=210, verilator a0=210 (expected 210)
+Summary: 1/1 passed, 0 failed

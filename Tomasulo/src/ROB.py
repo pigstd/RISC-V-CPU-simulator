@@ -299,6 +299,7 @@ class ROB:
         使用独立 RegArray 列表，每个寄存器只写一次，符合 Assassyn 设计理念
         """
         # 重置tail指针到head
+        log("ROB.flush: tail {} -> head {}", self.tail[0], self.head[0])
         self.tail[0] <= self.head[0]
         # 清空所有entry的相关位（每个独立 RegArray 只写一次）
         for i in range(FIFO_SIZE):

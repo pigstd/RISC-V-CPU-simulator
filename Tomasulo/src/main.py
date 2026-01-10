@@ -87,6 +87,7 @@ class IsserImpl(Downstream):
               pc_addr: Value,
               instr: Value,
               re: Value,
+              branch_ctrl, # 根据这个判断是否要 do_flush
               rob: ROB,
               rs: list[RSEntry],
               mul_rs: list[MUL_RSEntry],  # 乘法保留站（2个）
@@ -158,6 +159,17 @@ class IsserImpl(Downstream):
         # JALR 需要 stall（不预测）
         is_jalr_issue = decoder_result.is_jalr & re & (~resource_stall)
         jalr_stall = is_jalr_issue
+
+        branch_payload = branch_ctrl.value().optional(default=BranchControl_signal.bundle(
+            jalr_resolved = Bits(1)(0),
+            jalr_target_pc = UInt(32)(0),
+            mispredicted = Bits(1)(0),
+            correct_pc = UInt(32)(0),
+        ).value())
+        branch = BranchControl_signal.view(branch_payload)
+        do_flush = branch.mispredicted
+        # flush 时不发射指令
+        re = re & (~do_flush)
         
         with Condition(re == Bits(1)(1)):
             log("issuer: pc=0x{:08x} instr=0x{:08x} is_mem={} stall={} predict_valid={} jalr_stall={} bht_pred={}", 
@@ -168,6 +180,7 @@ class IsserImpl(Downstream):
                 next_tail = ((rob.tail[0] + UInt(ROB_IDX_WIDTH)(1)) & UInt(ROB_IDX_WIDTH)(ROB_MASK)).bitcast(UInt(ROB_IDX_WIDTH))
                 # reg_pending 用 rob_idx+1 表示，0 作为 sentinel
                 rob_tag_plus1 = (rob_idx.zext(UInt(REG_PENDING_WIDTH)) + UInt(REG_PENDING_WIDTH)(1)).bitcast(Bits(REG_PENDING_WIDTH))
+                log("ISSUE: advance tail from {} to {}", rob.tail[0], next_tail)
                 rob.tail[0] <= next_tail
                 rob._write_busy(rob_idx, Bits(1)(1))
                 rob._write_ready(rob_idx, Bits(1)(0))
@@ -663,6 +676,7 @@ def build_CPU(depth_log=18, data_base=0x2000):
             pc_addr=issue_pc_addr,
             instr=instr,
             re=re,
+            branch_ctrl=branch_ctrl,
             rob=rob,
             rs=rs,
             mul_rs=mul_rs,  # 添加乘法保留站
