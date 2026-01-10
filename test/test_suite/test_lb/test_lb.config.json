@@ -1,0 +1,11 @@
+{
+  "name": "test_lb",
+  "memory": {
+    "text_base": 0,
+    "data_base": 8192
+  },
+  "simulator": {
+    "sim_threshold": 100000,
+    "idle_threshold": 50000
+  }
+}
